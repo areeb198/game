@@ -27,7 +27,7 @@ version = 1.0
 # (list) Application requirements.
 #   python3  -> CPython for Android (pinned to 3.11: 3.12+ breaks several
 #               recipes because distutils was removed)
-requirements = python3,pygame-ce
+requirements = python3,pygame
 
 # (str) Presplash of the application
 #presplash.filename = %(source.dir)s/data/presplash.png
@@ -244,7 +244,7 @@ p4a.branch = develop
 
 # (str) The directory in which python-for-android should look for your own
 # build recipes. This is where ./p4a-recipes/pygame-ce/__init__.py lives.
-p4a.local_recipes = ./p4a-recipes
+# p4a.local_recipes = ./p4a-recipes
 
 # (str) Filename for the p4a hook
 #p4a.hook =
