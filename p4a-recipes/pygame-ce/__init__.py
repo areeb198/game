@@ -75,10 +75,18 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
                 for include_dir in sdl2_image_recipe.get_include_dirs(arch):
                     sdl_image_includes += f"-I{include_dir} "
 
-            ndk_lib = getattr(arch, "ndk_lib_dir_versioned", getattr(arch, "ndk_lib_dir", ""))
+            sdl_includes_list = []
+            if self.ctx.has_recipe("sdl2"):
+                sdl2_recipe = self.get_recipe("sdl2", self.ctx)
+                for d in sdl2_recipe.get_include_dirs(arch):
+                    sdl_includes_list.append(f"-I{d}")
+
+            for jni_name in ["SDL", "SDL2"]:
+                candidate = join(self.ctx.bootstrap.build_dir, "jni", jni_name, "include")
+                sdl_includes_list.append(f"-I{candidate}")
 
             sdl_libs = [
-                " -I" + join(self.ctx.bootstrap.build_dir, "jni", "SDL", "include"),
+                " ".join(sdl_includes_list),
                 " -L" + join(self.ctx.bootstrap.build_dir, "libs", str(arch))
             ]
             if png_lib_dir:
@@ -88,10 +96,17 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
             if ndk_lib:
                 sdl_libs.append(" -L" + ndk_lib)
 
+            sdl_ttf_list = []
+            if self.ctx.has_recipe("sdl2_ttf"):
+                sdl2_ttf_recipe = self.get_recipe("sdl2_ttf", self.ctx)
+                for d in sdl2_ttf_recipe.get_include_dirs(arch):
+                    sdl_ttf_list.append(f"-I{d}")
+            for jni_name in ["SDL2_ttf", "SDL_ttf"]:
+                sdl_ttf_list.append(f"-I{join(self.ctx.bootstrap.build_dir, 'jni', jni_name)}")
+
             setup_file = setup_template.format(
-                sdl_includes="".join(sdl_libs),
-                sdl_ttf_includes="-I" + join(
-                    self.ctx.bootstrap.build_dir, "jni", "SDL2_ttf"),
+                sdl_includes=" ".join(sdl_libs),
+                sdl_ttf_includes=" ".join(sdl_ttf_list),
                 sdl_image_includes=sdl_image_includes,
                 sdl_mixer_includes=sdl_mixer_includes,
                 jpeg_includes=("-I" + jpeg_inc_dir) if jpeg_inc_dir else "",
