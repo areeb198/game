@@ -62,8 +62,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: bzr-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
-          restore-keys: bzr-${{ runner.os }}-
+          key: bzr-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          restore-keys: bzr-v2-${{ runner.os }}-
 
       - name: Show the resolved configuration
         run: |

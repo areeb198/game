@@ -27,9 +27,7 @@ version = 1.0
 # (list) Application requirements.
 #   python3  -> CPython for Android (pinned to 3.11: 3.12+ breaks several
 #               recipes because distutils was removed)
-#   pygame-ce-> SDL2 build of pygame, supplied by the local recipe in
-#               ./p4a-recipes (the bundled p4a recipe is stuck on pygame 2.1.0)
-requirements = python3==3.11.15,pygame-ce
+requirements = python3,pygame-ce
 
 # (str) Presplash of the application
 #presplash.filename = %(source.dir)s/data/presplash.png
