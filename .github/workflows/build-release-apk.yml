@@ -85,9 +85,11 @@ jobs:
       - name: Cache the Android SDK / NDK / compiled Python
         uses: actions/cache@v4
         with:
-          path: .buildozer
-          key: bzr-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
-          restore-keys: bzr-v2-${{ runner.os }}-
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: bzr-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          restore-keys: bzr-v3-${{ runner.os }}-
 
       - name: Decode the upload keystore
         shell: bash

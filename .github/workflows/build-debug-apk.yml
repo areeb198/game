@@ -61,9 +61,11 @@ jobs:
       - name: Cache the Android SDK / NDK / compiled Python
         uses: actions/cache@v4
         with:
-          path: .buildozer
-          key: bzr-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
-          restore-keys: bzr-v2-${{ runner.os }}-
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: bzr-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          restore-keys: bzr-v3-${{ runner.os }}-
 
       - name: Show the resolved configuration
         run: |
@@ -73,7 +75,7 @@ jobs:
         run: |
           buildozer -v android debug || {
             echo "::error::Build failed! Dumping buildozer and p4a logs below:"
-            find .buildozer -name "*.log" -o -name "compile*.txt" | while read -r f; do
+            find ~/.buildozer .buildozer -name "*.log" 2>/dev/null | while read -r f; do
               echo "=== LOG: $f ==="
               tail -n 150 "$f"
             done

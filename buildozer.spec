@@ -78,11 +78,11 @@ android.permissions = android.permission.WAKE_LOCK
 android.api = 33
 
 # (int) Minimum API your APK / AAB will support.
-# 21 covers ~99% of active devices and keeps the NDK work small.
-android.minapi = 21
+# 24 is required for modern Python 3 / SDL2 builds on Android
+android.minapi = 24
 
 # (int) Android NDK API to use. Must match android.minapi.
-android.ndk_api = 21
+android.ndk_api = 24
 
 # (str) Android NDK version to use (r25c is the sweet spot for p4a builds)
 android.ndk = 25b
