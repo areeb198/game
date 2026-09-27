@@ -201,11 +201,8 @@ android.wakelock = True
 #android.copy_libs = 1
 
 # (list) The Android archs to build for.
-# armeabi-v7a  = 32-bit, very old devices
-# arm64-v8a    = 64-bit, every phone made since ~2016 - THIS is the one you need
-# x86_64       = emulators only
-# Keep just arm64-v8a for the fastest builds and the smallest APK.
-android.archs = arm64-v8a,armeabi-v7a
+# arm64-v8a = 64-bit ARM (covers modern Android phones)
+android.archs = arm64-v8a
 
 # (int) overrides automatic versionCode computation
 #android.numeric_version = 1

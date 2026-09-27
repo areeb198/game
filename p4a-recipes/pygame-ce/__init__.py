@@ -47,11 +47,12 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
             setup_template = open(
                 join("buildconfig", "Setup.Android.SDL2.in")).read()
             env = self.get_recipe_env(arch)
-            env["ANDROID_ROOT"] = join(self.ctx.ndk.sysroot, "usr")
+            ndk_sysroot = self.ctx.ndk.sysroot if hasattr(self.ctx, "ndk") and hasattr(self.ctx.ndk, "sysroot") else getattr(self.ctx, "ndk_sysroot", "")
+            env["ANDROID_ROOT"] = join(ndk_sysroot, "usr")
 
             png = self.get_recipe("png", self.ctx)
             png_lib_dir = join(png.get_build_dir(arch.arch), ".libs")
-            png_inc_dir = png.get_build_dir(arch)
+            png_inc_dir = png.get_build_dir(arch.arch)
 
             jpeg = self.get_recipe("jpeg", self.ctx)
             jpeg_inc_dir = jpeg_lib_dir = join(jpeg.get_build_dir(arch.arch))
@@ -66,6 +67,8 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
             for include_dir in sdl2_image_recipe.get_include_dirs(arch):
                 sdl_image_includes += f"-I{include_dir} "
 
+            ndk_lib = getattr(arch, "ndk_lib_dir_versioned", getattr(arch, "ndk_lib_dir", ""))
+
             setup_file = setup_template.format(
                 sdl_includes=(
                     " -I" + join(self.ctx.bootstrap.build_dir, "jni", "SDL",
@@ -74,7 +77,7 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
                                  str(arch)) +
                     " -L" + png_lib_dir +
                     " -L" + jpeg_lib_dir +
-                    " -L" + arch.ndk_lib_dir_versioned
+                    (" -L" + ndk_lib if ndk_lib else "")
                 ),
                 sdl_ttf_includes="-I" + join(
                     self.ctx.bootstrap.build_dir, "jni", "SDL2_ttf"),
