@@ -1,0 +1,87 @@
+name: Build debug APK
+
+# Builds a playable debug APK in the cloud. No Linux, Docker or WSL needed on
+# your machine - GitHub's runners are Ubuntu.
+#
+# After it finishes (first run ~25-40 min, later runs ~5 min):
+#   1. open the run on the Actions tab
+#   2. scroll to Artifacts
+#   3. download skystrikers-debug-apk
+#   4. unzip it and install the .apk on your phone
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "*.md"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: debug-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out the project
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk \
+            build-essential autoconf automake libtool pkg-config cmake ccache \
+            libffi-dev libssl-dev zlib1g-dev \
+            libncurses5-dev libtinfo5 patch gettext
+          java -version
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Buildozer
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          # cython<3.0 is required: Cython 3.0 removed longintrepr.h, which the
+          # python-for-android recipes still include.
+          pip install buildozer "cython<3.0" virtualenv
+          buildozer --version
+
+      - name: Cache the Android SDK / NDK / compiled Python
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: bzr-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          restore-keys: bzr-${{ runner.os }}-
+
+      - name: Show the resolved configuration
+        run: |
+          grep -E "requirements|p4a\.|android\.(archs|api|minapi|ndk|orientation)|fullscreen" buildozer.spec
+
+      - name: Build the debug APK
+        run: buildozer -v android debug
+
+      - name: Collect the APK
+        run: |
+          mkdir -p out
+          cp bin/*debug*.apk out/ 2>/dev/null || true
+          ls -lh out/
+          if [ -z "$(ls -A out 2>/dev/null)" ]; then
+            echo "::error::no APK was produced - scroll up for the build log"
+            exit 1
+          fi
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: skystrikers-debug-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30

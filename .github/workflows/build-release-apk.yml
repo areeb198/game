@@ -1,0 +1,149 @@
+name: Build signed release APK / AAB
+
+# Produces a *signed* build for distribution (sideloading outside your own
+# devices, or uploading to Google Play).
+#
+# ONE-TIME SETUP in the repository (Settings -> Secrets and variables ->
+# Actions -> New repository secret):
+#
+#   KEYSTORE_BASE64       the keystore file, base64 encoded (see below)
+#   KEYSTORE_PASSWORD     password you chose for the keystore
+#   KEY_ALIAS             key alias, e.g. "skystrikers"
+#   KEY_ALIAS_PASSWORD    password for that alias
+#
+# Create the keystore once, on any machine:
+#
+#   keytool -genkey -v -keystore skystrikers.keystore \
+#           -alias skystrikers -keyalg RSA -keysize 2048 -validity 10000
+#
+#   # Linux / macOS / WSL / Git Bash
+#   base64 -w0 skystrikers.keystore > keystore.b64
+#   # PowerShell
+#   [Convert]::ToBase64String([IO.File]::ReadAllBytes("skystrikers.keystore")) > keystore.b64
+#
+#   Get-Content keystore.b64 -Raw | Set-Clipboard     # paste into the secret
+#
+#   Back the keystore file up somewhere safe. Lose it and you can never update
+#   the app on the Play Store again.
+#
+# THEN: push a tag matching v* to trigger this workflow.
+#
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# The signed APK and the Play Store .aab are attached to the release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      aab:
+        description: "Also build an App Bundle (.aab) for Google Play"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Signed release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the project
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk \
+            build-essential autoconf automake libtool pkg-config cmake ccache \
+            libffi-dev libssl-dev zlib1g-dev \
+            libncurses5-dev libtinfo5 patch gettext
+          java -version
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Buildozer
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          pip install buildozer "cython<3.0" virtualenv
+
+      - name: Cache the Android SDK / NDK / compiled Python
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: bzr-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          restore-keys: bzr-${{ runner.os }}-
+
+      - name: Decode the upload keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "::error::KEYSTORE_BASE64 secret is not set"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$HOME/skystrikers.keystore"
+          keytool -list -keystore "$HOME/skystrikers.keystore" \
+            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" >/dev/null
+
+      - name: Write the signing config into buildozer.spec
+        shell: bash
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+          ALIAS_PASS: ${{ secrets.KEY_ALIAS_PASSWORD }}
+        run: |
+          {
+            echo ""
+            echo "# --- appended by the release workflow ---"
+            echo "android.keystore = $HOME/skystrikers.keystore"
+            echo "android.keystore_password = $KS_PASS"
+            echo "android.keyalias = $ALIAS"
+            echo "android.keyalias_password = $ALIAS_PASS"
+            echo "android.release_artifact = apk"
+          } >> buildozer.spec
+          tail -8 buildozer.spec
+
+      - name: Build the signed APK
+        run: buildozer -v android release
+
+      - name: Build the App Bundle for Google Play
+        if: ${{ github.event_name == 'push' || inputs.aab }}
+        run: |
+          sed -i 's/^android.release_artifact = apk/android.release_artifact = aab/' buildozer.spec
+          buildozer -v android release
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp bin/*.apk out/ 2>/dev/null || true
+          cp bin/*.aab out/ 2>/dev/null || true
+          ls -lh out/
+          test -n "$(ls -A out 2>/dev/null)" || { echo "::error::nothing was built"; exit 1; }
+          sha256sum out/* > out/SHA256SUMS.txt
+          cat out/SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skystrikers-release
+          path: out/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach to the GitHub release
+        if: ${{ github.event_name == 'push' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.apk
+            out/*.aab
+            out/SHA256SUMS.txt
+          generate_release_notes: true
