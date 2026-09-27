@@ -37,6 +37,7 @@ Design notes
   * Only `pygame`, `sys` and `random` are imported (plus built-ins).
 """
 
+import os
 import sys
 import random
 
@@ -49,9 +50,10 @@ import pygame
 
 GAME_TITLE = "SKY STRIKERS"
 
+IS_ANDROID = "ANDROID_ARGUMENT" in os.environ or "ANDROID_ROOT" in os.environ
 VW, VH = 480, 800              # virtual (design) resolution - portrait phone
 FPS = 60
-FULLSCREEN = True              # True = go fullscreen (needed on Android)
+FULLSCREEN = IS_ANDROID        # True on Android, windowed on PC desktop
 SOUND_ENABLED = True
 SHOW_FPS = False
 
@@ -1006,7 +1008,7 @@ class Game(object):
                 self.screen = pygame.display.set_mode((VW, VH),
                                                       pygame.RESIZABLE)
         pygame.display.set_caption(GAME_TITLE)
-        pygame.mouse.set_visible(False)
+        pygame.mouse.set_visible(not IS_ANDROID)
 
         self.canvas = pygame.Surface((VW, VH)).convert()
         self.scaled = None              # cached upscale target (see layout)
