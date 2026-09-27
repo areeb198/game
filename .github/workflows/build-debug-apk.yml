@@ -16,31 +16,19 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    container:
+      image: kivy/buildozer:latest
 
     steps:
       - name: Check out the project
         uses: actions/checkout@v4
 
-      - name: Cache Buildozer global & project directories
-        uses: actions/cache@v4
-        with:
-          path: |
-            .buildozer
-            ~/.buildozer
-          key: bzr-docker-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
-          restore-keys: bzr-docker-${{ runner.os }}-
-
-      - name: Build with Buildozer Action
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          workdir: .
-          buildozer_version: stable
+      - name: Build debug APK with Buildozer
+        run: buildozer -v android debug
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
           name: skystrikers-debug-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
           retention-days: 30
