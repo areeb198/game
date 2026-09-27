@@ -75,7 +75,7 @@ android.permissions = android.permission.WAKE_LOCK
 #android.features = android.hardware.touchscreen,android.hardware.gamepad
 
 # (int) Target Android API, should be as high as possible.
-android.api = 34
+android.api = 33
 
 # (int) Minimum API your APK / AAB will support.
 # 21 covers ~99% of active devices and keeps the NDK work small.

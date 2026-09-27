@@ -70,7 +70,15 @@ jobs:
           grep -E "requirements|p4a\.|android\.(archs|api|minapi|ndk|orientation)|fullscreen" buildozer.spec
 
       - name: Build the debug APK
-        run: buildozer -v android debug
+        run: |
+          buildozer -v android debug || {
+            echo "::error::Build failed! Dumping buildozer and p4a logs below:"
+            find .buildozer -name "*.log" -o -name "compile*.txt" | while read -r f; do
+              echo "=== LOG: $f ==="
+              tail -n 150 "$f"
+            done
+            exit 1
+          }
 
       - name: Collect the APK
         run: |

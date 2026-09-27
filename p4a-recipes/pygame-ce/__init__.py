@@ -25,7 +25,7 @@ from pythonforandroid.toolchain import current_directory
 class PygameCeRecipe(CompiledComponentsPythonRecipe):
     """Recipe to build apps based on SDL2-based pygame."""
 
-    version = "2.5.8"
+    version = "2.5.2"
     url = ("https://github.com/pygame-community/pygame-ce/archive/"
            "refs/tags/{version}.tar.gz")
 
