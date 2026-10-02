@@ -22,6 +22,7 @@ no longer happens to agree with a pinned python3 (kivy/buildozer#2040).
 """
 
 from os.path import join
+import re
 
 from pythonforandroid.recipe import CompiledComponentsPythonRecipe
 from pythonforandroid.toolchain import current_directory
@@ -109,14 +110,29 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
             # p4a follows build_ext with `pip install .`, which honours
             # pyproject.toml's [build-system].  pygame-ce names meson-python
             # there, which ignores the Setup file above and cannot cross
-            # compile with our NDK environment.  Keep a minimal PEP 517 header
-            # that routes pip through setuptools instead, and that installs a
-            # Cython into pip's isolated build env (setup.py imports it).
-            open("pyproject.toml", "w").write(
+            # compile with our NDK environment.  Replace that one table so pip
+            # goes through setuptools instead - and through the __legacy__
+            # backend, because the plain one does not put this directory on
+            # sys.path and setup.py's `import buildconfig` then fails.  Keep
+            # [project]: buildconfig.get_version reads version from it.
+            # Cython must be in requires too, since setup.py imports it.
+            pyproject = open("pyproject.toml").read()
+            replacement = (
                 "[build-system]\n"
                 'requires = ["setuptools>=40.8.0", "wheel", "cython==3.0.11"]\n'
-                'build-backend = "setuptools.build_meta"\n'
+                'build-backend = "setuptools.build_meta:__legacy__"\n\n'
             )
+            if "[build-system]" in pyproject:
+                pyproject = re.sub(
+                    r"\[build-system\].*?(?=\n\[|\Z)",
+                    replacement,
+                    pyproject,
+                    count=1,
+                    flags=re.S,
+                )
+            else:
+                pyproject = replacement + pyproject
+            open("pyproject.toml", "w").write(pyproject)
 
     def get_recipe_env(self, arch):
         env = super().get_recipe_env(arch)

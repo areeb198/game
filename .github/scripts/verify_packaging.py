@@ -261,7 +261,14 @@ def check_recipe_prebuild():
     # pygame-ce ships this.  p4a runs `pip install .` after build_ext, and pip
     # obeys [build-system] from pyproject.toml, so leaving meson-python there
     # makes pip throw away our Setup file and try to cross-compile blind.
+    # [project] matters too: setup.py imports buildconfig.get_version, which
+    # reads conf["project"]["version"] straight out of this file.
     (build_dir / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "pygame-ce"\n'
+        'version = "2.5.2"\n'
+        'readme = "README.rst"\n'
+        "\n"
         "[build-system]\n"
         'requires = ["meson-python<=0.16.0", "cython<=3.0.11"]\n'
         "build-backend = 'mesonpy'\n",
@@ -412,10 +419,23 @@ def check_recipe_prebuild():
              "as the build backend, so the `pip install .` p4a runs after "
              "build_ext will ignore the generated Setup and fail to cross "
              "compile for Android.")
-    elif "[build-system]" not in backend:
+    elif "setuptools.build_meta:__legacy__" not in backend:
+        fail("p4a-recipes/pygame-ce: pyproject.toml must select "
+             "setuptools.build_meta:__legacy__. The plain setuptools.build_meta "
+             "backend does not put the source directory on sys.path, so "
+             "setup.py's `import buildconfig` raises ModuleNotFoundError.")
+    if "[build-system]" not in backend:
         fail("p4a-recipes/pygame-ce: prebuild_arch() left pyproject.toml "
              "without a [build-system] table, so pip will build it without "
              "Cython and setuptools available.")
+    elif "cython" not in backend.lower():
+        fail("p4a-recipes/pygame-ce: pyproject.toml's build requires omit "
+             "cython, but pip builds in an isolated env where the hostpython "
+             "Cython is invisible, and setup.py imports Cython on every run.")
+    if "[project]" not in backend or 'version = "2.5.2"' not in backend:
+        fail("p4a-recipes/pygame-ce: prebuild_arch() stripped [project] from "
+             "pyproject.toml. buildconfig.get_version reads "
+             'conf["project"]["version"] and setup.py dies with KeyError.')
 
 
 def check_main():
