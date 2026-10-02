@@ -231,10 +231,10 @@ cat buildozer.spec | grep -E "requirements|p4a.branch|p4a.local_recipes|android.
 You should see:
 
 ```ini
-requirements = python3==3.11.15,pygame-ce
+requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce
 p4a.branch = develop
 p4a.local_recipes = ./p4a-recipes
-android.archs = arm64-v8a,armeabi-v7a
+android.archs = arm64-v8a
 orientation = portrait
 ```
 
@@ -245,13 +245,13 @@ If you never ran `buildozer init`, you can skip it — the supplied
 
 | Setting | Why this value |
 |---|---|
-| `requirements = python3==3.11.15,pygame-ce` | `pygame-ce` is our local recipe; it still installs the `pygame` module name, so your code is unchanged. Python is pinned because 3.12+ breaks the host build. |
-| `p4a.branch = develop` | The upstream `pygame` recipe is frozen at pygame **2.1.0** (2021) on *both* `master` and `develop`. `develop` is the actively maintained branch, so we use it plus our local recipe to get pygame-ce 2.5.8. |
-| `p4a.local_recipes = ./p4a-recipes` | Tells p4a where to find `p4a-recipes/pygame-ce/__init__.py`. |
+| `requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce` | `pygame-ce` is our local recipe; it still installs the `pygame` module name, so your code is unchanged. Python is pinned because 3.12+ breaks the host build, and **`hostpython3` must carry the identical version** — see the row below. |
+| `p4a.branch = develop` | The upstream `pygame` recipe is frozen at pygame **2.1.0** (2021) on *both* `master` and `develop`. `develop` is the actively maintained branch, so we use it plus our local recipe to get pygame-ce 2.5.2. |
+| `p4a.local_recipes = ./p4a-recipes` | Tells p4a where to find `p4a-recipes/pygame-ce/__init__.py`. **Commenting this line out is the single most common way to break the build** — p4a silently falls back to its unbuildable `pygame` 2.1.0 recipe. |
 | `p4a.bootstrap = sdl2` | Pygame runs inside SDL2. Without this you get the Kivy bootstrap and a blank screen. |
 | `android.entrypoint = org.kivy.android.PythonActivity` | Despite the name, this is correct: the SDL2 bootstrap initialises SDL2 and then executes `main.py`. |
-| `android.archs = arm64-v8a,armeabi-v7a` | 64-bit for every phone since ~2016, plus 32-bit for old hardware. Drop `armeabi-v7a` for ~2x faster builds and a smaller APK. Add `x86_64` only for emulators. |
-| `android.api = 34`, `android.minapi = 21`, `android.ndk_api = 21` | Target current Android, still run on Android 5.0+. `ndk_api` must equal `minapi`. |
+| `android.archs = arm64-v8a` | 64-bit covers every phone since ~2016 and roughly halves build time. Add `armeabi-v7a` (comma separated) for 32-bit only if you still support Android devices from before ~2016; add `x86_64` only for emulators. |
+| `android.api = 33`, `android.minapi = 24`, `android.ndk_api = 24` | Target Android 13, run on Android 7.0+. `ndk_api` **must** equal `minapi` — a mismatch is rejected by p4a. |
 | `android.ndk = 25b` | NDK r25b is the best-tested version for p4a. r26+ changes libc headers and causes link errors. |
 | `orientation = portrait` + `android.manifest.orientation = portrait` | Locks the game upright — without the second line Android may still rotate the Activity. |
 | `fullscreen = 1` | Immersive fullscreen: no status bar, no nav bar, no notch letterbox. |
@@ -267,7 +267,7 @@ If you never ran `buildozer init`, you can skip it — the supplied
 python-for-android *does* ship a `pygame` recipe, but it is pinned to
 **pygame 2.1.0 (2021)** on both its `master` and `develop` branches and it does
 not build against current NDKs or Python versions. So we override it with our
-own 93-line recipe:
+own 129-line recipe:
 
 ```
 p4a-recipes/pygame-ce/__init__.py
@@ -278,7 +278,7 @@ and `pygame-ce` in `requirements` selects ours instead of the built-in one.
 
 What the recipe does, in order:
 
-1. Downloads `pygame-ce 2.5.8` and unpacks it.
+1. Downloads `pygame-ce 2.5.2` and unpacks it.
 2. Reads pygame's own `buildconfig/Setup.Android.SDL2.in` — the template that
    lists which C modules to compile and which SDL2 libraries to link.
 3. Substitutes the real paths for this build: the SDL2 include dir from the
@@ -307,6 +307,32 @@ ships `buildconfig/Setup.Android.SDL2.in`, then `buildozer appclean` and
 rebuild. Any 2.4.x–2.5.x release works; `Setup.Android.SDL2.in` has been stable
 across those.
 
+### 3.2 Pre-flight check (run this before every build)
+
+A wrong `buildozer.spec` does not fail where you made the mistake — it fails
+~40 minutes later, deep inside python-for-android. This script checks the
+whole packaging setup up front and takes under a second:
+
+```bash
+python3 .github/scripts/verify_packaging.py
+```
+
+It verifies that:
+
+* `requirements` contains `pygame-ce`, not plain `pygame`
+  (plain `pygame` selects the unbuildable pygame **2.1.0** recipe);
+* `python3` and `hostpython3` are pinned to the **identical** version
+  (p4a aborts otherwise, see kivy/buildozer#2040);
+* `p4a.local_recipes` is present **and uncommented**;
+* `p4a.branch = develop` and `p4a.bootstrap = sdl2`;
+* the recipe parses, defines `version`, `name` and
+  `site_packages_name = "pygame"`, and references no undefined names;
+* `main.py` only imports `pygame`, `sys`, `random` and `os`.
+
+CI runs the same script as the first step of both workflows, so a broken
+config fails in seconds instead of burning a full build. Any non-zero exit
+means do not start the build yet.
+
 ---
 
 ## 4. Build the debug APK
@@ -329,7 +355,7 @@ buildozer android sdk          # just download SDK + NDK
 When it finishes you get:
 
 ```
-bin/skystrikers-1.0-arm64-v8a_armeabi-v7a-debug.apk
+bin/skystrikers-1.0-arm64-v8a-debug.apk
 ```
 
 ---
@@ -404,13 +430,14 @@ android.keyalias_password = yourpassword
 
 ```bash
 buildozer -v android release
-# -> bin/skystrikers-1.0-arm64-v8a_armeabi-v7a-release.apk
+# -> bin/skystrikers-1.0-arm64-v8a-release.apk
 ```
 
-### 6d. Shrink the APK
+### 6d. Shrink the APK further
 
-A default build with two ABIs is ~20–30 MB. Ship one ABI and it drops to
-~10 MB:
+The spec already ships one ABI, which is the big win (~10 MB instead of
+~20–30 MB for two). If you ever re-add `armeabi-v7a` and need it smaller
+again, drop back to:
 
 ```ini
 android.archs = arm64-v8a
@@ -420,7 +447,6 @@ android.archs = arm64-v8a
 
 ```ini
 android.release_artifact = aab
-android.minapi = 21
 ```
 
 ```bash
@@ -522,6 +548,10 @@ ls -lh bin/
 | `fatal error: longintrepr.h: No such file` | Cython 3.x | `pip install "cython<3.0"` inside the venv, then `buildozer appclean` |
 | `ModuleNotFoundError: No module named 'distutils'` | Python 3.12+ | Pin `requirements = python3==3.11.15,...` and use a 3.11 venv |
 | `Recipe not found: pygame-ce` | Local recipes path wrong | `p4a.local_recipes = ./p4a-recipes`, and the file must be `p4a-recipes/pygame-ce/__init__.py` |
+| Build dies compiling **`pygame-2.1.0`** (or any 15-minute-old `pygame` download) | `requirements` says plain `pygame`, **or** `p4a.local_recipes` is commented out | p4a then uses its built-in recipe, pinned to pygame 2.1.0. Restore `requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce` and an active `p4a.local_recipes = ./p4a-recipes`, then `buildozer appclean` |
+| `python3 should have same version as hostpython3, 3.11.15 != 3.14.2` | `hostpython3` is unpinned, so p4a takes its own default (3.14.2) while `python3` is pinned | p4a's `hostpython3` recipe hardcodes 3.14.2 and aborts on any mismatch. Pin **both** to the same version: `python3==3.11.15,hostpython3==3.11.15`. See kivy/buildozer#2040 — the `kivy/buildozer:latest` image moved to Ubuntu 26.04 / Python 3.14, so this now trips everyone who pins `python3` |
+| `NameError: name 'ndk_lib' is not defined` (or similar) inside the recipe | Undefined name in `p4a-recipes/` | Run `python3 .github/scripts/verify_packaging.py` — it parses the recipe and reports undefined names before you build |
+| CI fails in **seconds** at `Verify packaging configuration` | Deliberate | The message tells you exactly which of the settings above is wrong. Fix it rather than re-running the build |
 | `No module named 'Setup'` / buildconfig error | Recipe ran before sources unpacked | `buildozer appclean` (full wipe) and rebuild |
 | App installs, **black screen** | Wrong bootstrap or missing SDL2 | `p4a.bootstrap = sdl2`; confirm `requirements` contains `pygame-ce` |
 | App installs, **black screen**, config is correct | `pygame.SCALED` unsupported by that GPU/driver | Set `SCALED_DISPLAY = False` in `main.py` and rebuild — the game falls back to software scaling automatically |

@@ -46,6 +46,45 @@ def active_keys(text):
     return keys
 
 
+def check_python_pins(requirements):
+    """python3 and hostpython3 must be pinned to the identical version.
+
+    p4a's hostpython3 recipe hardcodes ``version = "3.14.2"`` and aborts in
+    ``download()`` when python3 differs, which is exactly the failure the
+    kivy/buildozer:latest image now triggers: that image moved to
+    ubuntu:26.04 / Python 3.14, so an unpinned hostpython3 is 3.14.2 while a
+    sane python3 pin is older. See kivy/buildozer#2040.
+    """
+    if not requirements:
+        return
+
+    pins = {}
+    for part in requirements.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, version = part.partition("==")
+        if sep:
+            pins[name.strip()] = version.strip()
+
+    target = pins.get("python3")
+    if not target:
+        fail("buildozer.spec: pin python3, e.g. 'python3==3.11.15'. Leaving it "
+             "unpinned selects whatever p4a currently defaults to, which "
+             "pygame-ce 2.5.x was never compiled against.")
+        return
+
+    host = pins.get("hostpython3")
+    if host is None:
+        fail("buildozer.spec: requirements must also carry "
+             f"'hostpython3=={target}'. p4a's hostpython3 recipe defaults to "
+             "3.14.2 and refuses to run when python3 is pinned elsewhere "
+             "(error: python3 should have same version as hostpython3).")
+    elif host != target:
+        fail(f"buildozer.spec: hostpython3=={host} must equal python3=={target}"
+             " - p4a aborts on any mismatch.")
+
+
 def check_spec():
     path = pathlib.Path("buildozer.spec")
     if not path.exists():
@@ -63,7 +102,7 @@ def check_spec():
 
     requirements = require(
         "requirements",
-        "It must read 'requirements = python3==3.11.15,pygame-ce'.",
+        "It must read 'requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce'.",
     )
     if requirements and "pygame-ce" not in requirements:
         fail(
@@ -71,6 +110,8 @@ def check_spec():
             f"'{requirements}'. python-for-android's built-in 'pygame' recipe is "
             "pinned to pygame 2.1.0 and does not compile against NDK r25b."
         )
+
+    check_python_pins(requirements)
 
     require(
         "p4a.local_recipes",

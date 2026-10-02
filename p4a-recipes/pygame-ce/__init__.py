@@ -13,7 +13,12 @@ and enable it in buildozer.spec with:
 
     p4a.branch = develop
     p4a.local_recipes = ./p4a-recipes
-    requirements = python3==3.11.15,pygame-ce
+    requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce
+
+`hostpython3` must carry the exact same version as `python3`: p4a's own
+`hostpython3` recipe hardcodes 3.14.2 and aborts on any mismatch, and the
+kivy/buildozer:latest image now ships Python 3.14, so an unpinned hostpython3
+no longer happens to agree with a pinned python3 (kivy/buildozer#2040).
 """
 
 from os.path import join

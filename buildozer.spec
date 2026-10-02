@@ -27,11 +27,19 @@ version = 1.0
 # (list) Application requirements.
 #   python3  -> CPython for Android (pinned to 3.11: 3.12+ breaks several
 #               recipes because distutils was removed)
+#   hostpython3 -> MUST be pinned to the SAME version as python3.  The host
+#               python is what compiles/imports the pure-python part, and
+#               p4a's recipe hardcodes 3.14.2, so without this line it builds
+#               3.14.2 host vs 3.11.15 target and dies with:
+#                 python3 should have same version as hostpython3, ...
+#               (kivy/buildozer#2040: the kivy/buildozer:latest image moved
+#               to ubuntu:26.04 / Python 3.14, so the default no longer
+#               happens to match a pinned python3).
 #   pygame-ce -> drop-in replacement for pygame, built from OUR local recipe
 #               in ./p4a-recipes.  It MUST be pygame-ce, never plain "pygame":
 #               python-for-android's built-in pygame recipe is pinned to
 #               pygame 2.1.0 (2021) and does not compile against NDK r25b.
-requirements = python3==3.11.15,pygame-ce
+requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce
 
 # (str) Presplash of the application
 #presplash.filename = %(source.dir)s/data/presplash.png
