@@ -11,8 +11,13 @@ bad change fails in seconds with a message instead of deep inside p4a.
 
 import ast
 import builtins
+import contextlib
+import importlib.util
+import os
 import pathlib
 import sys
+import tempfile
+import types
 
 # ``os`` is stdlib and always present on Android - main.py uses it only to
 # detect ANDROID_ARGUMENT/ANDROID_ROOT for fullscreen and cursor handling.
@@ -212,6 +217,180 @@ def undefined_names(tree):
     return visitor.found
 
 
+# pyflakes-style analysis would not catch these: they are valid Python that
+# only blows up against the real p4a object model.
+PY4A_CONTEXT_LIES = ("has_recipe",)
+PY4A_RECIPE_NO_INCLUDE_DIRS = ("sdl2", "sdl2_ttf")
+
+
+def check_recipe_prebuild():
+    """Actually run the recipe's prebuild_arch() against a stub of p4a.
+
+    Two mistakes are invisible to any static check and only surface minutes
+    into a real build, so we reproduce p4a's API exactly as it really is:
+
+    * ``Context`` has **no** ``has_recipe()`` - it exposes ``has_lib()`` and
+      ``has_package()`` instead, so probing with it raises AttributeError;
+    * ``get_include_dirs()`` exists only on ``sdl2_image`` and ``sdl2_mixer``
+      (the two recipes that define it), not on ``sdl2`` or ``sdl2_ttf``.
+
+    The stubs deliberately omit those members, so the recipe fails here in
+    seconds if it reaches for them.
+    """
+    path = pathlib.Path("p4a-recipes/pygame-ce/__init__.py")
+    if not path.exists():
+        return  # already reported by check_recipe()
+
+    work = pathlib.Path(tempfile.mkdtemp(prefix="recipe_sim_"))
+    build_dir = work / "build"
+    (build_dir / "buildconfig").mkdir(parents=True)
+
+    template = (
+        "SDL = {sdl_includes} -D_REENTRANT -DSDL2 -lSDL2\n"
+        "FONT = {sdl_ttf_includes} -lSDL2_ttf\n"
+        "IMAGE = {sdl_image_includes} -lSDL2_image\n"
+        "MIXER = {sdl_mixer_includes} -lSDL2_mixer\n"
+        "SCRAP = \n"
+        "FREETYPE = {freetype_includes} -lfreetype -lharfbuzz\n"
+        "JPEG = {jpeg_includes} x\n"
+        "PNG = {png_includes} x\n"
+    )
+    (build_dir / "buildconfig" / "Setup.Android.SDL2.in").write_text(
+        template, encoding="utf-8")
+
+    saved = {name: sys.modules.get(name) for name in
+             ("pythonforandroid", "pythonforandroid.recipe",
+              "pythonforandroid.toolchain")}
+
+    @contextlib.contextmanager
+    def current_directory(path):
+        previous = os.getcwd()
+        os.chdir(path)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
+
+    class FakeContext:
+        """Mirrors pythonforandroid.build.Context: no has_recipe()."""
+
+        def __init__(self):
+            self.bootstrap = types.SimpleNamespace(build_dir=str(work))
+            self.recipes = {
+                "sdl2_image": _RecipeWithIncludes(["/bi/SDL_image/include"]),
+                "sdl2_mixer": _RecipeWithIncludes(["/bm/SDL_mixer/include"]),
+                "sdl2": _RecipeWithoutIncludes(),
+                "sdl2_ttf": _RecipeWithoutIncludes(),
+            }
+
+        def __getattr__(self, name):
+            if name in PY4A_CONTEXT_LIES:
+                raise AttributeError(
+                    f"'Context' object has no attribute '{name}' - p4a's "
+                    "Context only has has_lib() and has_package()")
+            raise AttributeError(name)
+
+    class _RecipeWithIncludes:
+        def get_include_dirs(self, arch):
+            return list(self.__dict__.get("includes", []))
+
+        def __init__(self, includes=()):
+            self.includes = list(includes)
+
+    class _RecipeWithoutIncludes:
+        """sdl2 / sdl2_ttf: BootstrapNDKRecipe with no get_include_dirs()."""
+
+    class StubRecipe:
+        def __init__(self):
+            self.ctx = None
+
+        def prebuild_arch(self, arch):
+            pass
+
+        def get_recipe_env(self, arch):
+            return {}
+
+        def get_build_dir(self, arch):
+            return str(build_dir)
+
+        def get_recipe(self, name, ctx):
+            try:
+                return ctx.recipes[name]
+            except KeyError:
+                raise AttributeError(
+                    f"stub has no recipe {name!r}; the recipe asked for "
+                    "something outside its own depends")
+
+    stub_recipe = types.ModuleType("pythonforandroid.recipe")
+    stub_recipe.CompiledComponentsPythonRecipe = StubRecipe
+    stub_toolchain = types.ModuleType("pythonforandroid.toolchain")
+    stub_toolchain.current_directory = current_directory
+    stub_pkg = types.ModuleType("pythonforandroid")
+    stub_pkg.recipe = stub_recipe
+    stub_pkg.toolchain = stub_toolchain
+
+    sys.modules.update({
+        "pythonforandroid": stub_pkg,
+        "pythonforandroid.recipe": stub_recipe,
+        "pythonforandroid.toolchain": stub_toolchain,
+    })
+
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "recipe_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        recipe = module.recipe
+        recipe.ctx = FakeContext()
+
+        class Arch:
+            arch = "arm64-v8a"
+            ndk_lib_dir_versioned = "/ndk/lib/arm64-linux-android/24"
+
+            def __str__(self):
+                return self.arch
+
+        recipe.prebuild_arch(Arch())
+    except Exception as exc:  # noqa: BLE001 - the message is the point
+        fail(f"p4a-recipes/pygame-ce: prebuild_arch() raised "
+             f"{type(exc).__name__}: {exc}. This only happens once a real "
+             "build is minutes in, against p4a's actual API.")
+        return
+    finally:
+        for name, previous in saved.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+    setup = build_dir / "Setup"
+    if not setup.exists():
+        fail("p4a-recipes/pygame-ce: prebuild_arch() produced no Setup file, "
+             "so the C modules would never be compiled.")
+        return
+
+    generated = setup.read_text(encoding="utf-8")
+
+    def line(prefix):
+        return next((ln for ln in generated.splitlines()
+                     if ln.startswith(prefix + " =")), "")
+
+    if "-lSDL2" not in line("SDL"):
+        fail("p4a-recipes/pygame-ce: the generated Setup does not link -lSDL2.")
+    if "-I" not in line("SDL"):
+        fail("p4a-recipes/pygame-ce: SDL has no -I flags, so SDL.h would not "
+             f"be found. Got: {line('SDL').strip()!r}")
+    if "-I" not in line("FONT"):
+        fail("p4a-recipes/pygame-ce: sdl_ttf_includes is empty - "
+             f"{line('FONT').strip()!r}")
+    if "-I" not in line("IMAGE"):
+        fail("p4a-recipes/pygame-ce: sdl_image_includes is empty, so "
+             f"SDL_image.h would not be found. Got: {line('IMAGE').strip()!r}")
+    if "-I" not in line("MIXER"):
+        fail("p4a-recipes/pygame-ce: sdl_mixer_includes is empty, so "
+             f"SDL_mixer.h would not be found. Got: {line('MIXER').strip()!r}")
+
+
 def check_main():
     path = pathlib.Path("main.py")
     if not path.exists():
@@ -240,6 +419,7 @@ def check_main():
 def main():
     keys = check_spec()
     check_recipe()
+    check_recipe_prebuild()
     check_main()
 
     if errors:

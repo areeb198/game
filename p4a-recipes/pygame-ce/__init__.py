@@ -50,75 +50,52 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
         with current_directory(self.get_build_dir(arch.arch)):
             setup_template = open(
                 join("buildconfig", "Setup.Android.SDL2.in")).read()
-            env = self.get_recipe_env(arch)
-            ndk_sysroot = self.ctx.ndk.sysroot if hasattr(self.ctx, "ndk") and hasattr(self.ctx.ndk, "sysroot") else getattr(self.ctx, "ndk_sysroot", "")
-            if ndk_sysroot:
-                env["ANDROID_ROOT"] = join(ndk_sysroot, "usr")
 
-            png_lib_dir = ""
-            png_inc_dir = ""
-            if self.ctx.has_recipe("png"):
-                png = self.get_recipe("png", self.ctx)
-                png_lib_dir = join(png.get_build_dir(arch.arch), ".libs")
-                png_inc_dir = png.get_build_dir(arch.arch)
-
-            jpeg_inc_dir = ""
-            jpeg_lib_dir = ""
-            if self.ctx.has_recipe("jpeg"):
-                jpeg = self.get_recipe("jpeg", self.ctx)
-                jpeg_inc_dir = jpeg_lib_dir = join(jpeg.get_build_dir(arch.arch))
-
-            sdl_mixer_includes = ""
-            if self.ctx.has_recipe("sdl2_mixer"):
-                sdl2_mixer_recipe = self.get_recipe("sdl2_mixer", self.ctx)
-                for include_dir in sdl2_mixer_recipe.get_include_dirs(arch):
-                    sdl_mixer_includes += f"-I{include_dir} "
-
-            sdl_image_includes = ""
-            if self.ctx.has_recipe("sdl2_image"):
-                sdl2_image_recipe = self.get_recipe("sdl2_image", self.ctx)
-                for include_dir in sdl2_image_recipe.get_include_dirs(arch):
-                    sdl_image_includes += f"-I{include_dir} "
-
-            sdl_includes_list = []
-            if self.ctx.has_recipe("sdl2"):
-                sdl2_recipe = self.get_recipe("sdl2", self.ctx)
-                for d in sdl2_recipe.get_include_dirs(arch):
-                    sdl_includes_list.append(f"-I{d}")
-
-            for jni_name in ["SDL", "SDL2"]:
-                candidate = join(self.ctx.bootstrap.build_dir, "jni", jni_name, "include")
-                sdl_includes_list.append(f"-I{candidate}")
+            # SDL2 comes from the bootstrap: headers under jni/, compiled
+            # libs under libs/<arch>/.  Do not probe for these recipes -
+            # Context has no has_recipe() (it exposes only has_lib() and
+            # has_package()), so any such probe raises AttributeError.
+            bootstrap = self.ctx.bootstrap.build_dir
 
             sdl_libs = [
-                " ".join(sdl_includes_list),
-                " -L" + join(self.ctx.bootstrap.build_dir, "libs", str(arch))
+                "-I" + join(bootstrap, "jni", "SDL", "include"),
+                "-I" + join(bootstrap, "jni", "SDL2", "include"),
+                "-L" + join(bootstrap, "libs", str(arch)),
             ]
-            if png_lib_dir:
-                sdl_libs.append(" -L" + png_lib_dir)
-            if jpeg_lib_dir:
-                sdl_libs.append(" -L" + jpeg_lib_dir)
-
-            # Where the NDK sysroot keeps the shared libs we link against.
-            ndk_lib = getattr(arch, "ndk_lib_dir_versioned", "") or ""
+            # Optional extra search dir for the NDK sysroot's own libs.
+            ndk_lib = getattr(arch, "ndk_lib_dir_versioned", "")
             if ndk_lib:
-                sdl_libs.append(" -L" + ndk_lib)
+                sdl_libs.append("-L" + ndk_lib)
 
-            sdl_ttf_list = []
-            if self.ctx.has_recipe("sdl2_ttf"):
-                sdl2_ttf_recipe = self.get_recipe("sdl2_ttf", self.ctx)
-                for d in sdl2_ttf_recipe.get_include_dirs(arch):
-                    sdl_ttf_list.append(f"-I{d}")
-            for jni_name in ["SDL2_ttf", "SDL_ttf"]:
-                sdl_ttf_list.append(f"-I{join(self.ctx.bootstrap.build_dir, 'jni', jni_name)}")
+            sdl_ttf_includes = " ".join([
+                "-I" + join(bootstrap, "jni", "SDL2_ttf"),
+                "-I" + join(bootstrap, "jni", "SDL_ttf"),
+            ])
 
+            # Only sdl2_image and sdl2_mixer define get_include_dirs() (both
+            # are BootstrapNDKRecipe subclasses and both are in our depends).
+            # sdl2 and sdl2_ttf do NOT define it - calling it there raises
+            # AttributeError, so their headers are handled above via jni/.
+            sdl_image_includes = "".join(
+                f"-I{include_dir} "
+                for include_dir in self.get_recipe(
+                    "sdl2_image", self.ctx).get_include_dirs(arch))
+            sdl_mixer_includes = "".join(
+                f"-I{include_dir} "
+                for include_dir in self.get_recipe(
+                    "sdl2_mixer", self.ctx).get_include_dirs(arch))
+
+            # jpeg_includes / png_includes exist only so this call stays
+            # compatible with every pygame-ce 2.4.x-2.5.x template.  The
+            # Android templates do not reference either placeholder, and
+            # png/jpeg are not in our depends, so they are empty.
             setup_file = setup_template.format(
                 sdl_includes=" ".join(sdl_libs),
-                sdl_ttf_includes=" ".join(sdl_ttf_list),
+                sdl_ttf_includes=sdl_ttf_includes,
                 sdl_image_includes=sdl_image_includes,
                 sdl_mixer_includes=sdl_mixer_includes,
-                jpeg_includes=("-I" + jpeg_inc_dir) if jpeg_inc_dir else "",
-                png_includes=("-I" + png_inc_dir) if png_inc_dir else "",
+                jpeg_includes="",
+                png_includes="",
                 freetype_includes=""
             )
             open("Setup", "w").write(setup_file)
