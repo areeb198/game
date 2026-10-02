@@ -93,6 +93,9 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
                 sdl_libs.append(" -L" + png_lib_dir)
             if jpeg_lib_dir:
                 sdl_libs.append(" -L" + jpeg_lib_dir)
+
+            # Where the NDK sysroot keeps the shared libs we link against.
+            ndk_lib = getattr(arch, "ndk_lib_dir_versioned", "") or ""
             if ndk_lib:
                 sdl_libs.append(" -L" + ndk_lib)
 

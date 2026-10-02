@@ -16,12 +16,20 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
+    # A wedged build should not burn the whole 6 hour default allowance.
+    timeout-minutes: 120
     container:
       image: kivy/buildozer:latest
 
     steps:
       - name: Check out the project
         uses: actions/checkout@v4
+
+      # A wrong buildozer.spec only surfaces deep inside p4a, ~40 minutes in.
+      # Catch misconfiguration here instead: pygame-ce recipe present, its
+      # site_packages_name intact, and p4a.local_recipes actually enabled.
+      - name: Verify packaging configuration (fail fast)
+        run: python3 .github/scripts/verify_packaging.py
 
       - name: Build debug APK with Buildozer
         run: buildozer -v android debug
