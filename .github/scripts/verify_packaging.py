@@ -258,6 +258,15 @@ def check_recipe_prebuild():
     (build_dir / "buildconfig" / "Setup.Android.SDL2.in").write_text(
         template, encoding="utf-8")
 
+    # pygame-ce ships this.  p4a runs `pip install .` after build_ext, and pip
+    # obeys [build-system] from pyproject.toml, so leaving meson-python there
+    # makes pip throw away our Setup file and try to cross-compile blind.
+    (build_dir / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["meson-python<=0.16.0", "cython<=3.0.11"]\n'
+        "build-backend = 'mesonpy'\n",
+        encoding="utf-8")
+
     saved = {name: sys.modules.get(name) for name in
              ("pythonforandroid", "pythonforandroid.recipe",
               "pythonforandroid.toolchain")}
@@ -389,6 +398,24 @@ def check_recipe_prebuild():
     if "-I" not in line("MIXER"):
         fail("p4a-recipes/pygame-ce: sdl_mixer_includes is empty, so "
              f"SDL_mixer.h would not be found. Got: {line('MIXER').strip()!r}")
+
+    prerequisites = getattr(recipe, "hostpython_prerequisites", None) or []
+    if not any(str(p).lower().startswith("cython") for p in prerequisites):
+        fail("p4a-recipes/pygame-ce: hostpython_prerequisites has no cython. "
+             "pygame-ce's setup.py imports Cython for every build_ext run, so "
+             "the very first command p4a runs dies with "
+             "\"You need cython\".")
+
+    backend = (build_dir / "pyproject.toml").read_text(encoding="utf-8")
+    if "mesonpy" in backend:
+        fail("p4a-recipes/pygame-ce: pyproject.toml still selects meson-python "
+             "as the build backend, so the `pip install .` p4a runs after "
+             "build_ext will ignore the generated Setup and fail to cross "
+             "compile for Android.")
+    elif "[build-system]" not in backend:
+        fail("p4a-recipes/pygame-ce: prebuild_arch() left pyproject.toml "
+             "without a [build-system] table, so pip will build it without "
+             "Cython and setuptools available.")
 
 
 def check_main():

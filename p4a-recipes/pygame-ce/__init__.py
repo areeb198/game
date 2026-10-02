@@ -45,6 +45,12 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
     call_hostpython_via_targetpython = False   # setuptools is a host dep
     install_in_hostpython = False
 
+    # setup.py imports Cython at module level for *every* build_ext run, so it
+    # must be importable by the hostpython that executes setup.py.  p4a
+    # pip-installs exactly these into the hostpython right before it runs
+    # build_ext (PythonRecipe.hostpython_prerequisites).
+    hostpython_prerequisites = ["setuptools", "cython==3.0.11"]
+
     def prebuild_arch(self, arch):
         super().prebuild_arch(arch)
         with current_directory(self.get_build_dir(arch.arch)):
@@ -99,6 +105,18 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
                 freetype_includes=""
             )
             open("Setup", "w").write(setup_file)
+
+            # p4a follows build_ext with `pip install .`, which honours
+            # pyproject.toml's [build-system].  pygame-ce names meson-python
+            # there, which ignores the Setup file above and cannot cross
+            # compile with our NDK environment.  Keep a minimal PEP 517 header
+            # that routes pip through setuptools instead, and that installs a
+            # Cython into pip's isolated build env (setup.py imports it).
+            open("pyproject.toml", "w").write(
+                "[build-system]\n"
+                'requires = ["setuptools>=40.8.0", "wheel", "cython==3.0.11"]\n'
+                'build-backend = "setuptools.build_meta"\n'
+            )
 
     def get_recipe_env(self, arch):
         env = super().get_recipe_env(arch)
