@@ -11,6 +11,10 @@ name: Build signed release APK / AAB
 #   KEY_ALIAS             key alias, e.g. "skystrikers"
 #   KEY_ALIAS_PASSWORD    password for that alias
 #
+# buildozer reads no android.keystore* key from buildozer.spec: it passes --sign
+# only when P4A_RELEASE_KEYSTORE, P4A_RELEASE_KEYSTORE_PASSWD, P4A_RELEASE_KEYALIAS
+# and P4A_RELEASE_KEYALIAS_PASSWD are exported, which the build steps below do.
+#
 # Create the keystore once, on any machine:
 #
 #   keytool -genkey -v -keystore skystrikers.keystore \
@@ -51,6 +55,9 @@ jobs:
     name: Signed release
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+
+    env:
+      KEYSTORE_PATH: ${{ runner.temp }}/skystrikers.keystore
 
     steps:
       - name: Check out the project
@@ -99,35 +106,32 @@ jobs:
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           test -n "$KEYSTORE_BASE64" || { echo "::error::KEYSTORE_BASE64 secret is not set"; exit 1; }
-          echo "$KEYSTORE_BASE64" | base64 -d > "$HOME/skystrikers.keystore"
-          keytool -list -keystore "$HOME/skystrikers.keystore" \
-            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" >/dev/null
-
-      - name: Write the signing config into buildozer.spec
-        shell: bash
-        env:
-          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          ALIAS: ${{ secrets.KEY_ALIAS }}
-          ALIAS_PASS: ${{ secrets.KEY_ALIAS_PASSWORD }}
-        run: |
-          {
-            echo ""
-            echo "# --- appended by the release workflow ---"
-            echo "android.keystore = $HOME/skystrikers.keystore"
-            echo "android.keystore_password = $KS_PASS"
-            echo "android.keyalias = $ALIAS"
-            echo "android.keyalias_password = $ALIAS_PASS"
-            echo "android.release_artifact = apk"
-          } >> buildozer.spec
-          tail -8 buildozer.spec
+          echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$KS_PASS" >/dev/null
 
       - name: Build the signed APK
-        run: buildozer -v android release
+        shell: bash
+        env:
+          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/skystrikers.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_ALIAS_PASSWORD }}
+        run: |
+          # buildozer reads nothing from android.keystore in the spec; it only
+          # passes --sign when these four P4A_RELEASE_* variables are present.
+          buildozer -v android release
 
       - name: Build the App Bundle for Google Play
         if: ${{ github.event_name == 'push' || inputs.aab }}
+        shell: bash
+        env:
+          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/skystrikers.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_ALIAS_PASSWORD }}
         run: |
           sed -i 's/^android.release_artifact = apk/android.release_artifact = aab/' buildozer.spec
           buildozer -v android release
@@ -141,6 +145,19 @@ jobs:
           test -n "$(ls -A out 2>/dev/null)" || { echo "::error::nothing was built"; exit 1; }
           sha256sum out/* > out/SHA256SUMS.txt
           cat out/SHA256SUMS.txt
+
+      # buildozer exits 0 even when it could not sign, so an unsigned artifact
+      # would otherwise be shipped as a successful release.
+      - name: Verify the artifacts are signed
+        shell: bash
+        run: |
+          python3 .github/scripts/verify_signed_artifacts.py out
+          APKSIGNER="$(find .buildozer -type f -name apksigner -path '*build-tools*' | head -1)"
+          test -n "$APKSIGNER" || { echo "::error::apksigner not found in the Android SDK"; exit 1; }
+          for apk in out/*.apk; do
+            echo "== apksigner verify $apk"
+            "$APKSIGNER" verify --print-certs "$apk"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
