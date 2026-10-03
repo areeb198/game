@@ -56,9 +56,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
 
-    env:
-      KEYSTORE_PATH: ${{ runner.temp }}/skystrikers.keystore
-
     steps:
       - name: Check out the project
         uses: actions/checkout@v4
@@ -109,30 +106,36 @@ jobs:
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           test -n "$KEYSTORE_BASE64" || { echo "::error::KEYSTORE_BASE64 secret is not set"; exit 1; }
-          echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
-          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$KS_PASS" >/dev/null
+          echo "$KEYSTORE_BASE64" | base64 -d > "$HOME/skystrikers.keystore"
+          keytool -list -keystore "$HOME/skystrikers.keystore" -storepass "$KS_PASS" >/dev/null
 
       - name: Build the signed APK
         shell: bash
         env:
-          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/skystrikers.keystore
-          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
-          P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
-          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_ALIAS_PASSWORD }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+          ALIAS_PASS: ${{ secrets.KEY_ALIAS_PASSWORD }}
         run: |
           # buildozer reads nothing from android.keystore in the spec; it only
           # passes --sign when these four P4A_RELEASE_* variables are present.
+          export P4A_RELEASE_KEYSTORE="$HOME/skystrikers.keystore"
+          export P4A_RELEASE_KEYSTORE_PASSWD="$KS_PASS"
+          export P4A_RELEASE_KEYALIAS="$ALIAS"
+          export P4A_RELEASE_KEYALIAS_PASSWD="$ALIAS_PASS"
           buildozer -v android release
 
       - name: Build the App Bundle for Google Play
         if: ${{ github.event_name == 'push' || inputs.aab }}
         shell: bash
         env:
-          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/skystrikers.keystore
-          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
-          P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
-          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_ALIAS_PASSWORD }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+          ALIAS_PASS: ${{ secrets.KEY_ALIAS_PASSWORD }}
         run: |
+          export P4A_RELEASE_KEYSTORE="$HOME/skystrikers.keystore"
+          export P4A_RELEASE_KEYSTORE_PASSWD="$KS_PASS"
+          export P4A_RELEASE_KEYALIAS="$ALIAS"
+          export P4A_RELEASE_KEYALIAS_PASSWD="$ALIAS_PASS"
           sed -i 's/^android.release_artifact = apk/android.release_artifact = aab/' buildozer.spec
           buildozer -v android release
 
