@@ -196,14 +196,17 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip wheel setuptools
-pip install buildozer "cython<3.0" virtualenv
+pip install buildozer "cython==3.0.11" virtualenv
 ```
 
 **Pins that matter:**
 
-* `cython<3.0` — Cython 3.0 removed `longintrepr.h`, which the p4a recipes
-  (and therefore pygame) still include. This one pin fixes the most common
-  "unknown file: longintrepr.h" failure.
+* `cython==3.0.11` — the exact version `p4a-recipes/pygame-ce` pins into the
+  hostpython, and the one this project builds with in CI. pygame-ce's
+  `setup.py` imports Cython on every `build_ext` run; without it the build
+  dies in seconds with `You need cython. https://cython.org/`. Do **not**
+  downgrade to `cython<3.0`: pygame-ce's own `pyproject.toml` declares
+  `cython<=3.0.11`, and the older pin is what breaks `longintrepr.h`.
 * `--upgrade pip wheel setuptools` — old pip/setuptools break PEP 517 builds.
 
 Check what you got:
@@ -513,7 +516,7 @@ RUN useradd -m -s /bin/bash $USER \
  && echo "%sudo ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 USER $USER
-RUN pip install --no-cache-dir buildozer "cython<3.0" virtualenv
+RUN pip install --no-cache-dir buildozer "cython==3.0.11" virtualenv
 WORKDIR /home/user/project
 ENTRYPOINT ["buildozer"]
 ```
@@ -545,17 +548,22 @@ ls -lh bin/
 |---|---|---|
 | `buildozer: command not found` on Windows | Buildozer needs Linux | Use WSL2 or Docker |
 | `Aidl not found` / `aidl` crash | Android SDK build-tools too new for p4a | `buildozer android clean`, or pin `android.ndk = 25b` and delete `.buildozer/android/platform/build-*` |
-| `fatal error: longintrepr.h: No such file` | Cython 3.x | `pip install "cython<3.0"` inside the venv, then `buildozer appclean` |
+| `fatal error: longintrepr.h: No such file` | Cython newer than the version the recipe pins | Install `cython==3.0.11` (the same pin `p4a-recipes/pygame-ce` uses) and `buildozer appclean`. Do not swap in `cython<3.0` — pygame-ce is built and tested against `cython<=3.0.11` |
 | `ModuleNotFoundError: No module named 'distutils'` | Python 3.12+ | Pin `requirements = python3==3.11.15,...` and use a 3.11 venv |
 | `Recipe not found: pygame-ce` | Local recipes path wrong | `p4a.local_recipes = ./p4a-recipes`, and the file must be `p4a-recipes/pygame-ce/__init__.py` |
 | Build dies compiling **`pygame-2.1.0`** (or any 15-minute-old `pygame` download) | `requirements` says plain `pygame`, **or** `p4a.local_recipes` is commented out | p4a then uses its built-in recipe, pinned to pygame 2.1.0. Restore `requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce` and an active `p4a.local_recipes = ./p4a-recipes`, then `buildozer appclean` |
 | `python3 should have same version as hostpython3, 3.11.15 != 3.14.2` | `hostpython3` is unpinned, so p4a takes its own default (3.14.2) while `python3` is pinned | p4a's `hostpython3` recipe hardcodes 3.14.2 and aborts on any mismatch. Pin **both** to the same version: `python3==3.11.15,hostpython3==3.11.15`. See kivy/buildozer#2040 — the `kivy/buildozer:latest` image moved to Ubuntu 26.04 / Python 3.14, so this now trips everyone who pins `python3` |
 | `NameError: name 'ndk_lib' is not defined` (or similar) inside the recipe | Undefined name in `p4a-recipes/` | Run `python3 .github/scripts/verify_packaging.py` — it parses the recipe and reports undefined names before you build |
+| `You need cython. https://cython.org/, pip install cython --user` | pygame-ce's `setup.py` imports Cython at module level for *every* `build_ext` run | The recipe puts `cython==3.0.11` in `hostpython_prerequisites`, which p4a pip-installs into the hostpython right before `build_ext`. Confirm that line is still there, then `buildozer appclean` |
+| `KeyError: 'project'` in `buildconfig/get_version.py` | The recipe replaced all of `pyproject.toml` instead of only its `[build-system]` table | `buildconfig.get_version` reads `conf["project"]["version"]`, so `[project]` must survive the rewrite. `verify_packaging.py` fails the build if it is stripped |
+| `ModuleNotFoundError: No module named 'buildconfig'` while building pygame-ce | pip's plain `setuptools.build_meta` backend does not put the source directory on `sys.path` | The recipe must select `setuptools.build_meta:__legacy__` — only the legacy backend runs `setup.py` with the project directory importable |
+| pygame-ce build invokes **meson**, or dies inside `pip install .` | pygame-ce's own `pyproject.toml` names `meson-python`, which ignores the generated `Setup` and cannot cross compile with our NDK env | The recipe rewrites `[build-system]` to setuptools in `prebuild_arch`. `verify_packaging.py` feeds a realistic meson `pyproject.toml` through the recipe and fails if meson survives |
+| `'Context' object has no attribute 'has_recipe'` (or `get_include_dirs`) inside the recipe | p4a's `Context` exposes only `has_lib()`/`has_package()`; `get_include_dirs()` exists only on `sdl2_image` and `sdl2_mixer` | `verify_packaging.py` runs `prebuild_arch()` against a stub that reproduces p4a's real API, so this fails in seconds rather than minutes into a cold build |
 | CI fails in **seconds** at `Verify packaging configuration` | Deliberate | The message tells you exactly which of the settings above is wrong. Fix it rather than re-running the build |
 | `No module named 'Setup'` / buildconfig error | Recipe ran before sources unpacked | `buildozer appclean` (full wipe) and rebuild |
 | App installs, **black screen** | Wrong bootstrap or missing SDL2 | `p4a.bootstrap = sdl2`; confirm `requirements` contains `pygame-ce` |
 | App installs, **black screen**, config is correct | `pygame.SCALED` unsupported by that GPU/driver | Set `SCALED_DISPLAY = False` in `main.py` and rebuild — the game falls back to software scaling automatically |
-| App installs, **crashes instantly** | Missing shared lib | `adb logcat | grep -i "error\|dlopen\|python"` — usually an ABI mismatch; try `android.archs = arm64-v8a` only |
+| App installs, **crashes instantly** | Missing shared lib | `adb logcat \| grep -i "error\|dlopen\|python"` — usually an ABI mismatch; try `android.archs = arm64-v8a` only |
 | **Touch does not work** | Buttons need finger events, not mouse | This game handles `FINGERDOWN/FINGERUP` *and* mouse. If only mouse works, SDL touch emulation is off — set `fullscreen = 0`, run once, and re-enable |
 | Buttons in the **wrong place** | Screen aspect/letterboxing | The game maps screen→virtual coordinates itself; if you changed `VW, VH` re-test, the mapping is automatic |
 | High score **not remembered** after closing the app | `skystrikers.save` could not be written | It is written to the app's private folder, so this is normal and needs no permission. If it fails the game silently plays without a record. Deleting the app data clears it. |
