@@ -3,11 +3,14 @@
 buildozer only appends --sign to the python-for-android command when the four
 P4A_RELEASE_* environment variables exist, and it reports the miss as a plain
 error line while still exiting 0. An unsigned build therefore succeeds and gets
-uploaded, so the artifacts are checked structurally instead of by file name.
+uploaded, so the artifacts are checked structurally instead of by file name,
+and the App Bundle is additionally put through jarsigner.
 
 usage: verify_signed_artifacts.py <directory>
 """
 
+import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -32,6 +35,32 @@ def is_v1_signed(entries):
     has_digest = any(n.upper().endswith(".SF") for n in entries)
     has_block = any(n.upper().endswith((".RSA", ".DSA", ".EC")) for n in entries)
     return has_digest and has_block
+
+
+def jarsigner_rejects(path):
+    """Return why jarsigner refuses the bundle, or None once it verifies.
+
+    The exit status is useless as a guard: jarsigner reports an unsigned jar
+    with status 0 and a correctly signed, self-signed one with status 4, so
+    only the report text separates the two.
+    """
+    jarsigner = shutil.which("jarsigner")
+    if jarsigner is None:
+        return "jarsigner is not on PATH (actions/setup-java provides it)"
+
+    run = subprocess.run(
+        [jarsigner, "-verify", str(path)],
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    report = (run.stdout or "") + (run.stderr or "")
+    if "jar verified" in report:
+        return None
+    for line in report.splitlines():
+        if line.strip():
+            return line.strip()
+    return "jarsigner produced no report"
 
 
 def main(argv):
@@ -74,7 +103,11 @@ def main(argv):
                     "P4A_RELEASE_* variables did not reach python-for-android"
                 )
                 continue
-            print(f"{path.name}: signed (v1)")
+            reject = jarsigner_rejects(path)
+            if reject:
+                failures.append(f"{path.name} failed jarsigner verification: {reject}")
+                continue
+            print(f"{path.name}: signed (v1, jarsigner verified)")
 
     for failure in failures:
         print(f"::error::{failure}")
