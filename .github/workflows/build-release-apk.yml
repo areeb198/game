@@ -155,8 +155,15 @@ jobs:
         shell: bash
         run: |
           python3 .github/scripts/verify_signed_artifacts.py out
-          APKSIGNER="$(find .buildozer -type f -name apksigner -path '*build-tools*' | head -1)"
+          # buildozer keeps the SDK in ~/.buildozer, the build tree in ./.buildozer
+          APKSIGNER=""
+          for root in "$HOME/.buildozer" "$PWD/.buildozer"; do
+            if [ ! -d "$root" ]; then continue; fi
+            APKSIGNER="$(find "$root" -type f -name apksigner -path '*build-tools*' -print -quit 2>/dev/null)"
+            if [ -n "$APKSIGNER" ]; then break; fi
+          done
           test -n "$APKSIGNER" || { echo "::error::apksigner not found in the Android SDK"; exit 1; }
+          echo "apksigner: $APKSIGNER"
           for apk in out/*.apk; do
             echo "== apksigner verify $apk"
             "$APKSIGNER" verify --print-certs "$apk"
