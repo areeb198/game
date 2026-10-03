@@ -117,6 +117,9 @@ git tag v1.0.0 && git push origin v1.0.0
 ```
 
 The signed `.apk` and the Play Store `.aab` are attached to the release page.
+To build without publishing anything, run the workflow by hand instead
+(**Actions → Build signed release APK / AAB → Run workflow**); the signed
+files are then just an artifact, kept for 90 days.
 **Back the keystore file up** — lose it and you can never update the app on
 the Play Store again.
 
@@ -415,26 +418,46 @@ keytool -genkey -v \
   -keyalg RSA -keysize 2048 -validity 10000
 ```
 
-### 6b. Point the spec at it
+### 6b. Export the four `P4A_RELEASE_*` variables
 
-Add to `buildozer.spec`:
+Buildozer reads **no** `android.keystore*` key from `buildozer.spec` — those
+lines are silently ignored. It looks only at four environment variables, and
+if any is missing it prints `P4A_RELEASE_KEYSTORE is missing--sign will not be
+passed`, drops `--sign`, and still exits 0:
 
-```ini
-android.keystore = ~/skystrikers.keystore
-android.keystore_password = yourpassword
-android.keyalias = skystrikers
-android.keyalias_password = yourpassword
+```bash
+export P4A_RELEASE_KEYSTORE=~/skystrikers.keystore
+export P4A_RELEASE_KEYSTORE_PASSWD=yourpassword
+export P4A_RELEASE_KEYALIAS=skystrikers
+export P4A_RELEASE_KEYALIAS_PASSWD=yourpassword
 ```
 
-> Buildozer's default is to use `$HOME/.android/debug.keystore` automatically.
-> You only need the block above for a real signed release.
+All four must be exported in the **same shell** that runs `buildozer`.
 
-### 6c. Build
+> Buildozer's default for `debug` is p4a's throwaway keystore, which is what
+> you sideload with. The block above is only for a real signed release.
+
+### 6c. Build, then check that it really signed
 
 ```bash
 buildozer -v android release
 # -> bin/skystrikers-1.0-arm64-v8a-release.apk
 ```
+
+The name matters: `*-release.apk` means `--sign` was passed,
+`*-release-unsigned.apk` means the four variables did not reach buildozer.
+Confirm the signature rather than trusting the name:
+
+```bash
+APKSIGNER="$(find ~/.buildozer/android/platform/android-sdk \
+  -name apksigner -path '*build-tools*' -print -quit)"
+"$APKSIGNER" verify --print-certs bin/skystrikers-1.0-arm64-v8a-release.apk
+# V2 Signer: certificate SHA-256 digest: <your keystore's fingerprint>
+```
+
+CI runs the same check via `.github/scripts/verify_signed_artifacts.py` plus
+`apksigner verify`, so an unsigned artifact fails the release job instead of
+being published.
 
 ### 6d. Shrink the APK further
 
@@ -666,7 +689,8 @@ buildozer -v android debug
 # rebuild after edits (fast)
 buildozer android debug deploy run logcat
 
-# release
+# release - export the four P4A_RELEASE_* variables first (section 6b),
+# otherwise buildozer skips signing and you get a *-release-unsigned.apk
 buildozer -v android release
 
 # Play Store bundle
