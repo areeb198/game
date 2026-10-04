@@ -16,7 +16,7 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,ogg,wav,ttf
 
 # (list) Never ship these - they bloat the APK massively
-source.exclude_dirs = tests,test,bin,venv,.venv,.buildozer,__pycache__,git,docker,store
+source.exclude_dirs = tests,test,bin,venv,.venv,.buildozer,__pycache__,git,docker,store,.github,tools
 
 # (list) Patterns to exclude
 source.exclude_patterns = *.pyc,*.pyo,*.md,buildozer.spec,p4a-recipes/*,*.spec,skystrikers.save,data/icon.png,data/presplash.jpg

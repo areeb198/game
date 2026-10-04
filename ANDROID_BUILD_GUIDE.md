@@ -471,47 +471,137 @@ android.archs = arm64-v8a
 
 ### 6e. Google Play (App Bundle)
 
+Play accepts an **App Bundle** (`.aab`), never a raw APK. Two checks gate it:
+
+```bash
+python3 .github/scripts/verify_packaging.py                # spec, in seconds
+python3 .github/scripts/verify_play_ready_artifact.py out  # the built manifest
+```
+
+The second one is the one that matters. `android.api` in the spec only
+records what you *asked* for — Gradle decides what lands in the manifest, and
+Play reads the manifest.
+
+**Cloud build** (nothing to install):
+
+1. Actions -> **Build signed release APK / AAB** -> **Run workflow**
+2. Leave `aab: true`, press **Run workflow**
+3. Download the `skystrikers-release` artifact: `*-release.aab`,
+   `*-release.apk`, `SHA256SUMS.txt`
+
+**Local build** (Linux host, the four `P4A_RELEASE_*` exports from 6b):
+
 ```ini
 android.release_artifact = aab
 ```
 
 ```bash
+python3 .github/scripts/drop_stale_dist.py
 buildozer android release
 # -> bin/skystrikers-1.0-arm64-v8a-release.aab
 ```
 
-Upload that `.aab` at <https://play.google.com/console>.
+**A cached build keeps the old targetSdk.** python-for-android reuses an
+existing distribution by requirements, bootstrap and architecture only — it
+never re-reads `android.api`. Its `build.gradle` was rendered once, at
+creation time, so restoring that dist from the Actions cache after raising
+the API keeps emitting the previous `targetSdkVersion`; the build then goes
+green and produces a bundle Play refuses at submission.
+`drop_stale_dist.py` deletes any dist whose `build.gradle` disagrees with the
+spec, and the release workflow runs it before every build.
+
+#### What Play refuses, and which check catches it
+
+| Play rule | Enforced on | Guard |
+| --- | --- | --- |
+| `targetSdkVersion` >= 36 (Android 16), since 31 Aug 2026 | the built manifest, at submission | `android.api = 36` + `verify_play_ready_artifact.py` |
+| application id never changes after the first upload | the package name | `package.domain` check in `verify_packaging.py` |
+| `versionCode` must strictly increase on every upload | the package name | `android.numeric_version`, cross-checked against the manifest |
+| 512x512 PNG app icon | the store listing | `icon.filename`, checked in `verify_packaging.py` |
+| signed with your upload key | the artifact | `verify_signed_artifacts.py` + `apksigner verify` |
+
+### 6f. The Play Console side (human steps)
+
+Everything below happens in <https://play.google.com/console>. Nothing in
+this repository can do it for you.
+
+**1. Account — once.** Pay the $25 one-time registration fee and complete
+identity verification; that alone can take a few days.
+
+**2. Create app.** Name `Sky Strikers`, a default language, free, and "Game".
+Then *Set up your app* walks through the declarations that block a release:
+
+- **Ads** — this game has none.
+- **Content rating** — the IARC questionnaire.
+- **Target audience and content** — pick the age band.
+- **Data safety** — the game collects nothing: no account, no network, no
+  analytics. Declare "No data collected".
+- **Privacy policy URL** — required as soon as you declare any data
+  collection; with the declaration above Play does not insist.
+- **App access** — no login, so nothing to provide.
+
+**3. Account and app signing.** Play App Signing is mandatory: Google holds
+the *app signing key*, and the keystore from 6a stays with you as your
+**upload key**. Lose it and you can never upload again.
+
+**4. Store listing.** All three graphics already exist in the repository:
+
+| asset | file | Play's required size |
+| --- | --- | --- |
+| App icon | `data/icon.png` | 512x512 PNG |
+| Feature graphic | `store/feature-graphic.png` | 1024x500 |
+| Screenshots | — | at least 2 phone screenshots |
+
+Screenshots are the only gap: capture them from a device or an emulator
+after installing the debug APK (section 5). Descriptions: short <= 80
+characters, full <= 4000.
+
+**5. Release.** Tracks, in order:
+
+1. **Internal testing** — upload the `.aab`, confirm it installs and plays.
+2. **Closed testing** — the one that gates you. Personal developer accounts
+   created after 13 Nov 2023 need **at least 12 testers opted in
+   continuously for 14 days** before production access is even allowed.
+   Opting out resets that person's clock, so tell testers to stay in.
+3. **Production** — apply from the Dashboard once the 14 days are up. Google
+   reviews the application, usually within a week.
+
+**6. Every later update.** Bump `android.numeric_version` in
+`buildozer.spec` by one, rebuild, upload the new `.aab`. Reusing or lowering
+a `versionCode` is rejected, and a `versionCode` can never be rolled back.
 
 ---
 
 ## 7. Icons and splash screen
 
-Buildozer uses a default icon unless you point it at your own.
+All three pieces of artwork ship in the repository and are already wired up:
+
+| file | size | used for |
+| --- | --- | --- |
+| `data/icon.png` | 512x512 PNG | launcher icon, and the Play listing icon |
+| `data/presplash.jpg` | 480x800 | shown while the activity starts |
+| `store/feature-graphic.png` | 1024x500 | Play listing only, never bundled |
+
+`buildozer.spec` points at the first two:
+
+```ini
+icon.filename = %(source.dir)s/data/icon.png
+presplash.filename = %(source.dir)s/data/presplash.jpg
+```
+
+Both are named in `source.exclude_patterns` and `store/` is in
+`source.exclude_dirs`, so neither reaches the APK — buildozer reads them off
+disk while packaging and keeps them out of the private bundle.
+
+Regenerate after changing the palette or the title:
 
 ```bash
 pip install pillow
-# 512x512 PNG for the launcher icon
-python - <<'PY'
-from PIL import Image, ImageDraw
-img = Image.new("RGBA", (512, 512), (10, 12, 34, 255))
-d = ImageDraw.Draw(img)
-d.polygon([(256, 90), (400, 400), (256, 330), (112, 400)], fill=(108, 232, 255))
-d.ellipse((226, 170, 286, 250), fill=(255, 214, 92))
-img.save("icon.png")
-PY
+python tools/make_store_art.py
 ```
 
-Then uncomment in `buildozer.spec`:
-
-```ini
-icon.filename = %(source.dir)s/icon.png
-#icon.adaptive_foreground.filename = %(source.dir)s/icon_fg.png   # Android 8+
-#icon.adaptive_background.filename = %(source.dir)s/icon_bg.png
-#presplash.filename = %(source.dir)s/presplash.png                # 1024x1024
-#android.presplash_color = #0A0C22
-```
-
-`.png` is already in `source.include_exts`, so no other change is needed.
+Overwrite the files, not the spec: `verify_packaging.py` fails the build if
+either is missing, or if the icon is not exactly 512x512.
 
 ---
 
