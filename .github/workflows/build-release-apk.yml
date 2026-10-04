@@ -109,6 +109,13 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$HOME/skystrikers.keystore"
           keytool -list -keystore "$HOME/skystrikers.keystore" -storepass "$KS_PASS" >/dev/null
 
+      # p4a reuses any cached dist whose requirements/bootstrap/arch match and
+      # never re-checks android.api, so a cache restored after raising it would
+      # keep shipping the old targetSdkVersion - which Play rejects.
+      - name: Drop a dist rendered for a different targetSdk
+        shell: bash
+        run: python3 .github/scripts/drop_stale_dist.py
+
       - name: Build the signed APK
         shell: bash
         env:
