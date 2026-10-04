@@ -169,6 +169,13 @@ jobs:
             "$APKSIGNER" verify --print-certs "$apk"
           done
 
+      # Play reads the built manifest, not buildozer.spec. An upload whose
+      # targetSdkVersion is below the current floor is rejected at submission,
+      # so prove the value that Gradle actually stamped onto the artifact.
+      - name: Verify the APK is acceptable to Google Play
+        shell: bash
+        run: python3 .github/scripts/verify_play_ready_artifact.py out
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -15,6 +15,8 @@ import contextlib
 import importlib.util
 import os
 import pathlib
+import re
+import struct
 import sys
 import tempfile
 import types
@@ -438,6 +440,125 @@ def check_recipe_prebuild():
              'conf["project"]["version"] and setup.py dies with KeyError.')
 
 
+# Google Play has required targetSdk 36 for every new app and every update
+# since 31 Aug 2026 - see
+# developer.android.com/google/play/requirements/target-sdk.  An upload with
+# a lower targetSdkVersion is rejected at submission, not at review.
+PLAY_MIN_API = 36
+
+# Values people copy out of the buildozer.spec template and never change.
+PLACEHOLDER_SEGMENTS = {"yourstudio", "yourcompany", "yourdomain", "yourname",
+                        "example", "test", "acme", "yourdepartment"}
+
+SEGMENT = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def png_size(path):
+    """(width, height) from a PNG's IHDR chunk - no Pillow needed."""
+    try:
+        head = path.read_bytes()[:24]
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
+def check_play_ready(keys):
+    """Everything Play Console enforces before it accepts an upload."""
+
+    def first(key):
+        return (keys.get(key) or [""])[0]
+
+    api = first("android.api")
+    if not api:
+        fail("buildozer.spec: 'android.api' is missing or commented out. "
+             "Play requires targetSdkVersion >= 36.")
+    else:
+        try:
+            if int(api) < PLAY_MIN_API:
+                fail(f"buildozer.spec: android.api = {api}, but Google Play "
+                     f"rejects anything below {PLAY_MIN_API} (Android 16) for "
+                     "new apps and updates since 31 Aug 2026. Raise it to "
+                     f"{PLAY_MIN_API}; targetSdkVersion is taken directly "
+                     "from this value.")
+        except ValueError:
+            fail(f"buildozer.spec: android.api must be an integer, got {api!r}.")
+
+    domain = first("package.domain")
+    if not domain:
+        fail("buildozer.spec: 'package.domain' is missing, so there is no "
+             "application id to upload.")
+    else:
+        segments = domain.split(".")
+        malformed = [s for s in segments if not SEGMENT.fullmatch(s)]
+        if len(segments) < 2 or malformed:
+            fail(f"buildozer.spec: package.domain = {domain!r} is not a valid "
+                 "reverse-DNS id - each dot-separated part must be lowercase "
+                 "alphanumerics starting with a letter.")
+        elif any(s in PLACEHOLDER_SEGMENTS or s.startswith("your") for s in segments):
+            fail(f"buildozer.spec: package.domain = {domain!r} is still the "
+                 "template placeholder. The application id becomes permanent "
+                 "the moment Play accepts it and cannot be changed later - "
+                 "set it to a real id first.")
+
+    name = first("package.name")
+    if name and not SEGMENT.fullmatch(name):
+        fail(f"buildozer.spec: package.name = {name!r} is not a valid "
+             "application id segment.")
+
+    numeric = first("android.numeric_version")
+    if not numeric:
+        fail("buildozer.spec: 'android.numeric_version' is missing, so the "
+             "versionCode falls back to p4a's automatic computation. Play "
+             "needs a value you control that strictly increases on every "
+             "upload - set it explicitly.")
+    else:
+        try:
+            if int(numeric) < 1:
+                fail(f"buildozer.spec: android.numeric_version = {numeric} "
+                     "must be >= 1.")
+        except ValueError:
+            fail("buildozer.spec: android.numeric_version must be an integer, "
+                 f"got {numeric!r}.")
+
+    if not first("version"):
+        fail("buildozer.spec: 'version' (the human readable versionName) is "
+             "missing.")
+
+    if not first("title"):
+        fail("buildozer.spec: 'title' is missing; Play and the launcher both "
+             "need an app label.")
+
+    source_dir = first("source.dir") or "."
+
+    for key, kind in (("icon.filename", "icon"),
+                      ("presplash.filename", "presplash")):
+        raw = first(key)
+        if not raw:
+            fail(f"buildozer.spec: '{key}' is missing or commented out. Play "
+                 "requires a 512x512 app icon and the default Kivy artwork "
+                 "ships otherwise.")
+            continue
+        path = pathlib.Path(raw.replace("%(source.dir)s", source_dir))
+        if not path.exists():
+            fail(f"buildozer.spec: {key} points at {path}, which does not "
+                 "exist. Commit the asset or fix the path.")
+            continue
+        if kind == "icon":
+            size = png_size(path)
+            if size is None:
+                fail(f"buildozer.spec: {path} is not a valid PNG; the launcher "
+                 "icon must be a PNG.")
+            elif size != (512, 512):
+                fail(f"buildozer.spec: launcher icon must be exactly 512x512 "
+                     f"for the Play listing, got {size[0]}x{size[1]}.")
+        else:
+            head = path.read_bytes()[:4]
+            if not (head.startswith(b"\xff\xd8") or head.startswith(b"\x89PNG")):
+                fail(f"buildozer.spec: {path} is neither a JPEG nor a PNG.")
+
+
 def check_main():
     path = pathlib.Path("main.py")
     if not path.exists():
@@ -465,6 +586,7 @@ def check_main():
 
 def main():
     keys = check_spec()
+    check_play_ready(keys)
     check_recipe()
     check_recipe_prebuild()
     check_main()
@@ -486,12 +608,22 @@ def main():
         "android.ndk_api",
         "android.ndk",
         "android.archs",
+        "android.numeric_version",
+        "package.domain",
+        "package.name",
+        "icon.filename",
+        "presplash.filename",
         "orientation",
         "fullscreen",
     ):
         values = keys.get(key)
         if values:
             print(f"  {key} = {values[0]}")
+
+    domain = (keys.get("package.domain") or [""])[0]
+    name = (keys.get("package.name") or [""])[0]
+    if domain and name:
+        print(f"  application id  = {domain}.{name}")
     return 0
 
 

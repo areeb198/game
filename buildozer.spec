@@ -7,7 +7,7 @@ title = Sky Strikers
 package.name = skystrikers
 
 # (str) Package domain (needed for android packaging)
-package.domain = org.yourstudio
+package.domain = com.areeb
 
 # (str) Source code where the main.py lives
 source.dir = .
@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,jpeg,ogg,wav,ttf
 source.exclude_dirs = tests,test,bin,venv,.venv,.buildozer,__pycache__,git,docker
 
 # (list) Patterns to exclude
-source.exclude_patterns = *.pyc,*.pyo,*.md,buildozer.spec,p4a-recipes/*,*.spec,skystrikers.save
+source.exclude_patterns = *.pyc,*.pyo,*.md,buildozer.spec,p4a-recipes/*,*.spec,skystrikers.save,data/icon.png,data/presplash.jpg
 
 # (str) Application versioning (method 1)
 version = 1.0
@@ -42,10 +42,10 @@ version = 1.0
 requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce
 
 # (str) Presplash of the application
-#presplash.filename = %(source.dir)s/data/presplash.png
+presplash.filename = %(source.dir)s/data/presplash.jpg
 
 # (str) Icon of the application
-#icon.filename = %(source.dir)s/data/icon.png
+icon.filename = %(source.dir)s/data/icon.png
 
 # (str) Adaptive icon (Android 8.0+)
 #icon.adaptive_foreground.filename = %(source.dir)s/data/icon_fg.png
@@ -87,7 +87,9 @@ android.permissions = android.permission.WAKE_LOCK
 #android.features = android.hardware.touchscreen,android.hardware.gamepad
 
 # (int) Target Android API, should be as high as possible.
-android.api = 33
+# 36 = Android 16. Google Play has required targetSdk 36 for NEW apps and
+# updates since 31 Aug 2026 - uploading with a lower value is rejected.
+android.api = 36
 
 # (int) Minimum API your APK / AAB will support.
 # 24 is required for modern Python 3 / SDL2 builds on Android
@@ -215,7 +217,9 @@ android.wakelock = True
 android.archs = arm64-v8a
 
 # (int) overrides automatic versionCode computation
-#android.numeric_version = 1
+# Play requires this to strictly increase on every upload. Bump it by 1
+# before each new release; never reuse or lower it.
+android.numeric_version = 1
 
 # (bool) enables Android auto backup feature
 android.allow_backup = True
