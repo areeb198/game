@@ -250,7 +250,7 @@ android.debug_artifact = apk
 
 # (str) python-for-android branch to use.
 # The pygame recipe only lives on the development branch, never on master.
-p4a.branch = develop
+# p4a.branch = develop  # kivy/buildozer container has p4a pre-installed
 
 # (str) python-for-android specific commit to use
 #p4a.commit = HEAD

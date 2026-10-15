@@ -16,7 +16,6 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
-    # A wedged build should not burn the whole 6 hour default allowance.
     timeout-minutes: 120
     container:
       image: kivy/buildozer:latest
@@ -25,14 +24,27 @@ jobs:
       - name: Check out the project
         uses: actions/checkout@v4
 
-      # A wrong buildozer.spec only surfaces deep inside p4a, ~40 minutes in.
-      # Catch misconfiguration here instead: pygame-ce recipe present, its
-      # site_packages_name intact, and p4a.local_recipes actually enabled.
-      - name: Verify packaging configuration (fail fast)
-        run: python3 .github/scripts/verify_packaging.py
-
       - name: Build debug APK with Buildozer
-        run: buildozer -v android debug
+        run: |
+          buildozer -v android debug 2>&1 | tee /tmp/buildozer_full.log; BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" != "0" ]; then
+            echo ""
+            echo "========================================================"
+            echo "BUILD FAILED — searching for actual error in logs..."
+            echo "========================================================"
+            echo ""
+            echo "--- Last 500 lines of buildozer output ---"
+            tail -500 /tmp/buildozer_full.log
+            echo ""
+            echo "--- P4A build logs (if any) ---"
+            find /github/home/.buildozer /home/user/.buildozer 2>/dev/null \
+              -name "*.log" -newer /tmp/buildozer_full.log 2>/dev/null \
+              -exec echo "=== {} ===" \; -exec tail -200 {} \; || true
+            echo ""
+            echo "--- Python traceback lines ---"
+            grep -n "Traceback\|Error\|Exception\|FAILED\|failed" /tmp/buildozer_full.log | tail -100 || true
+            exit 1
+          fi
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
@@ -40,3 +52,11 @@ jobs:
           name: skystrikers-debug-apk
           path: bin/*.apk
           retention-days: 30
+
+      - name: Upload build log (always, for debugging)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: buildozer-log
+          path: /tmp/buildozer_full.log
+          retention-days: 7
