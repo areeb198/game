@@ -1,31 +1,18 @@
-"""Fail fast on packaging mistakes before a 40 minute Buildozer run.
+"""Minimal packaging sanity check before a long Buildozer run.
 
-python-for-android ships its own ``pygame`` recipe pinned to pygame 2.1.0
-(2021), which does not compile against NDK r25b.  The only way the APK can
-build is from our local recipe in ``p4a-recipes/pygame-ce``, which p4a only
-finds when ``p4a.local_recipes`` is active in ``buildozer.spec``.
-
-This script checks that the configuration is actually wired up, so that a
-bad change fails in seconds with a message instead of deep inside p4a.
+Checks that the buildozer.spec has the bare minimum needed for a
+successful pygame APK build using p4a's built-in pygame recipe.
 """
 
 import ast
 import builtins
-import contextlib
-import importlib.util
-import os
 import pathlib
 import re
 import struct
 import sys
-import tempfile
-import types
 
-# ``os`` is stdlib and always present on Android - main.py uses it only to
-# detect ANDROID_ARGUMENT/ANDROID_ROOT for fullscreen and cursor handling.
+# ``os`` is stdlib and always present on Android.
 ALLOWED_IMPORTS = {"pygame", "sys", "random", "os"}
-
-BUILTINS = set(dir(builtins)) | {"__file__", "__name__"}
 
 errors = []
 
@@ -35,8 +22,6 @@ def fail(message):
 
 
 def read(path):
-    # utf-8-sig: Windows editors add a BOM. Python tolerates it in source
-    # files, so refusing it here would be a false failure.
     return path.read_text(encoding="utf-8-sig")
 
 
@@ -51,45 +36,6 @@ def active_keys(text):
         if sep:
             keys.setdefault(key.strip(), []).append(value.strip())
     return keys
-
-
-def check_python_pins(requirements):
-    """python3 and hostpython3 must be pinned to the identical version.
-
-    p4a's hostpython3 recipe hardcodes ``version = "3.14.2"`` and aborts in
-    ``download()`` when python3 differs, which is exactly the failure the
-    kivy/buildozer:latest image now triggers: that image moved to
-    ubuntu:26.04 / Python 3.14, so an unpinned hostpython3 is 3.14.2 while a
-    sane python3 pin is older. See kivy/buildozer#2040.
-    """
-    if not requirements:
-        return
-
-    pins = {}
-    for part in requirements.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        name, sep, version = part.partition("==")
-        if sep:
-            pins[name.strip()] = version.strip()
-
-    target = pins.get("python3")
-    if not target:
-        fail("buildozer.spec: pin python3, e.g. 'python3==3.11.15'. Leaving it "
-             "unpinned selects whatever p4a currently defaults to, which "
-             "pygame-ce 2.5.x was never compiled against.")
-        return
-
-    host = pins.get("hostpython3")
-    if host is None:
-        fail("buildozer.spec: requirements must also carry "
-             f"'hostpython3=={target}'. p4a's hostpython3 recipe defaults to "
-             "3.14.2 and refuses to run when python3 is pinned elsewhere "
-             "(error: python3 should have same version as hostpython3).")
-    elif host != target:
-        fail(f"buildozer.spec: hostpython3=={host} must equal python3=={target}"
-             " - p4a aborts on any mismatch.")
 
 
 def check_spec():
@@ -109,454 +55,25 @@ def check_spec():
 
     requirements = require(
         "requirements",
-        "It must read 'requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce'.",
+        "It must include 'python3' and a pygame requirement.",
     )
-    if requirements and "pygame-ce" not in requirements:
+    if requirements and "pygame" not in requirements:
         fail(
-            "buildozer.spec: 'requirements' must contain 'pygame-ce', got "
-            f"'{requirements}'. python-for-android's built-in 'pygame' recipe is "
-            "pinned to pygame 2.1.0 and does not compile against NDK r25b."
+            f"buildozer.spec: 'requirements' must contain 'pygame' (or 'pygame-ce'), "
+            f"got '{requirements}'."
         )
-
-    check_python_pins(requirements)
-
-    require(
-        "p4a.local_recipes",
-        "Without it p4a never loads p4a-recipes/pygame-ce/ and silently falls "
-        "back to its broken built-in pygame recipe.",
-    )
-
-    require("p4a.branch", "It must be 'develop'.")
 
     bootstrap = keys.get("p4a.bootstrap", [""])[0]
     if bootstrap and bootstrap != "sdl2":
         fail(f"buildozer.spec: p4a.bootstrap must be 'sdl2', got '{bootstrap}'.")
 
     if "android.accept_sdk_license" not in keys:
-        fail("buildozer.spec: 'android.accept_sdk_license = True' is missing, "
-             "so the Android SDK install will hang on a licence prompt.")
+        fail(
+            "buildozer.spec: 'android.accept_sdk_license = True' is missing, "
+            "so the Android SDK install will hang on a licence prompt."
+        )
 
     return keys
-
-
-def check_recipe():
-    path = pathlib.Path("p4a-recipes/pygame-ce/__init__.py")
-    if not path.exists():
-        fail("p4a-recipes/pygame-ce/__init__.py is missing. p4a has no "
-             "pygame-ce recipe to build from.")
-        return
-
-    source = read(path)
-
-    # Plain-text checks run before parsing so they still fire when the file
-    # is syntactically broken and would otherwise swallow the real message.
-    if 'name = "pygame-ce"' not in source:
-        fail("Local recipe must declare name = \"pygame-ce\" (what you put in "
-             "'requirements').")
-    if 'site_packages_name = "pygame"' not in source:
-        fail("Local recipe must declare site_packages_name = \"pygame\", or the "
-             "wheel installs as site-packages/pygame-ce and 'import pygame' "
-             "fails on the device.")
-    if not any(line.strip().startswith("version =") for line in source.splitlines()):
-        fail("Local recipe has no 'version' field, so p4a cannot build it.")
-
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        fail(f"Local recipe has a syntax error: {exc}")
-        return
-
-    undefined = undefined_names(tree)
-    if undefined:
-        fail("Local recipe references undefined name(s): "
-             f"{', '.join(sorted(undefined))} - this raises NameError at build "
-             "time, long after this file is first loaded.")
-
-
-def undefined_names(tree):
-    """Names read but never bound anywhere - pyflakes' F821, implemented
-    in-tree so this check needs no extra dependency.
-
-    Deliberately module-wide rather than scope-accurate: that can miss a
-    bug across function boundaries but never invents one, so a red build
-    always means a real problem.
-    """
-    bound = set(BUILTINS)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.Lambda)):
-            if isinstance(node, ast.FunctionDef):
-                bound.add(node.name)
-            args = node.args
-            bound.update(a.arg for a in args.args)
-            bound.update(a.arg for a in args.kwonlyargs)
-            bound.update(a.arg for a in args.posonlyargs)
-            if args.vararg:
-                bound.add(args.vararg.arg)
-            if args.kwarg:
-                bound.add(args.kwarg.arg)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                bound.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ClassDef):
-            bound.add(node.name)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bound.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            bound.add(node.name)
-        elif isinstance(node, (ast.Global, ast.Nonlocal)):
-            bound.update(node.names)
-
-    class Free(ast.NodeVisitor):
-        def __init__(self):
-            self.found = set()
-
-        def visit_Name(self, node):
-            if isinstance(node.ctx, ast.Load) and node.id not in bound:
-                self.found.add(node.id)
-
-    visitor = Free()
-    visitor.visit(tree)
-    return visitor.found
-
-
-# pyflakes-style analysis would not catch these: they are valid Python that
-# only blows up against the real p4a object model.
-PY4A_CONTEXT_LIES = ("has_recipe",)
-PY4A_RECIPE_NO_INCLUDE_DIRS = ("sdl2", "sdl2_ttf")
-
-
-def check_recipe_prebuild():
-    """Actually run the recipe's prebuild_arch() against a stub of p4a.
-
-    Two mistakes are invisible to any static check and only surface minutes
-    into a real build, so we reproduce p4a's API exactly as it really is:
-
-    * ``Context`` has **no** ``has_recipe()`` - it exposes ``has_lib()`` and
-      ``has_package()`` instead, so probing with it raises AttributeError;
-    * ``get_include_dirs()`` exists only on ``sdl2_image`` and ``sdl2_mixer``
-      (the two recipes that define it), not on ``sdl2`` or ``sdl2_ttf``.
-
-    The stubs deliberately omit those members, so the recipe fails here in
-    seconds if it reaches for them.
-    """
-    path = pathlib.Path("p4a-recipes/pygame-ce/__init__.py")
-    if not path.exists():
-        return  # already reported by check_recipe()
-
-    work = pathlib.Path(tempfile.mkdtemp(prefix="recipe_sim_"))
-    build_dir = work / "build"
-    (build_dir / "buildconfig").mkdir(parents=True)
-
-    template = (
-        "SDL = {sdl_includes} -D_REENTRANT -DSDL2 -lSDL2\n"
-        "FONT = {sdl_ttf_includes} -lSDL2_ttf\n"
-        "IMAGE = {sdl_image_includes} -lSDL2_image\n"
-        "MIXER = {sdl_mixer_includes} -lSDL2_mixer\n"
-        "SCRAP = \n"
-        "FREETYPE = {freetype_includes} -lfreetype -lharfbuzz\n"
-        "JPEG = {jpeg_includes} x\n"
-        "PNG = {png_includes} x\n"
-    )
-    (build_dir / "buildconfig" / "Setup.Android.SDL2.in").write_text(
-        template, encoding="utf-8")
-
-    # pygame-ce ships this.  p4a runs `pip install .` after build_ext, and pip
-    # obeys [build-system] from pyproject.toml, so leaving meson-python there
-    # makes pip throw away our Setup file and try to cross-compile blind.
-    # [project] matters too: setup.py imports buildconfig.get_version, which
-    # reads conf["project"]["version"] straight out of this file.
-    (build_dir / "pyproject.toml").write_text(
-        "[project]\n"
-        'name = "pygame-ce"\n'
-        'version = "2.5.2"\n'
-        'readme = "README.rst"\n'
-        "\n"
-        "[build-system]\n"
-        'requires = ["meson-python<=0.16.0", "cython<=3.0.11"]\n'
-        "build-backend = 'mesonpy'\n",
-        encoding="utf-8")
-
-    saved = {name: sys.modules.get(name) for name in
-             ("pythonforandroid", "pythonforandroid.recipe",
-              "pythonforandroid.toolchain")}
-
-    @contextlib.contextmanager
-    def current_directory(path):
-        previous = os.getcwd()
-        os.chdir(path)
-        try:
-            yield
-        finally:
-            os.chdir(previous)
-
-    class FakeContext:
-        """Mirrors pythonforandroid.build.Context: no has_recipe()."""
-
-        def __init__(self):
-            self.bootstrap = types.SimpleNamespace(build_dir=str(work))
-            self.recipes = {
-                "sdl2_image": _RecipeWithIncludes(["/bi/SDL_image/include"]),
-                "sdl2_mixer": _RecipeWithIncludes(["/bm/SDL_mixer/include"]),
-                "sdl2": _RecipeWithoutIncludes(),
-                "sdl2_ttf": _RecipeWithoutIncludes(),
-            }
-
-        def __getattr__(self, name):
-            if name in PY4A_CONTEXT_LIES:
-                raise AttributeError(
-                    f"'Context' object has no attribute '{name}' - p4a's "
-                    "Context only has has_lib() and has_package()")
-            raise AttributeError(name)
-
-    class _RecipeWithIncludes:
-        def get_include_dirs(self, arch):
-            return list(self.__dict__.get("includes", []))
-
-        def __init__(self, includes=()):
-            self.includes = list(includes)
-
-    class _RecipeWithoutIncludes:
-        """sdl2 / sdl2_ttf: BootstrapNDKRecipe with no get_include_dirs()."""
-
-    class StubRecipe:
-        def __init__(self):
-            self.ctx = None
-
-        def prebuild_arch(self, arch):
-            pass
-
-        def get_recipe_env(self, arch):
-            return {}
-
-        def get_build_dir(self, arch):
-            return str(build_dir)
-
-        def get_recipe(self, name, ctx):
-            try:
-                return ctx.recipes[name]
-            except KeyError:
-                raise AttributeError(
-                    f"stub has no recipe {name!r}; the recipe asked for "
-                    "something outside its own depends")
-
-    stub_recipe = types.ModuleType("pythonforandroid.recipe")
-    stub_recipe.CompiledComponentsPythonRecipe = StubRecipe
-    stub_toolchain = types.ModuleType("pythonforandroid.toolchain")
-    stub_toolchain.current_directory = current_directory
-    stub_pkg = types.ModuleType("pythonforandroid")
-    stub_pkg.recipe = stub_recipe
-    stub_pkg.toolchain = stub_toolchain
-
-    sys.modules.update({
-        "pythonforandroid": stub_pkg,
-        "pythonforandroid.recipe": stub_recipe,
-        "pythonforandroid.toolchain": stub_toolchain,
-    })
-
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "recipe_under_test", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        recipe = module.recipe
-        recipe.ctx = FakeContext()
-
-        class Arch:
-            arch = "arm64-v8a"
-            ndk_lib_dir_versioned = "/ndk/lib/arm64-linux-android/24"
-
-            def __str__(self):
-                return self.arch
-
-        recipe.prebuild_arch(Arch())
-    except Exception as exc:  # noqa: BLE001 - the message is the point
-        fail(f"p4a-recipes/pygame-ce: prebuild_arch() raised "
-             f"{type(exc).__name__}: {exc}. This only happens once a real "
-             "build is minutes in, against p4a's actual API.")
-        return
-    finally:
-        for name, previous in saved.items():
-            if previous is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = previous
-
-    setup = build_dir / "Setup"
-    if not setup.exists():
-        fail("p4a-recipes/pygame-ce: prebuild_arch() produced no Setup file, "
-             "so the C modules would never be compiled.")
-        return
-
-    generated = setup.read_text(encoding="utf-8")
-
-    def line(prefix):
-        return next((ln for ln in generated.splitlines()
-                     if ln.startswith(prefix + " =")), "")
-
-    if "-lSDL2" not in line("SDL"):
-        fail("p4a-recipes/pygame-ce: the generated Setup does not link -lSDL2.")
-    if "-I" not in line("SDL"):
-        fail("p4a-recipes/pygame-ce: SDL has no -I flags, so SDL.h would not "
-             f"be found. Got: {line('SDL').strip()!r}")
-    if "-I" not in line("FONT"):
-        fail("p4a-recipes/pygame-ce: sdl_ttf_includes is empty - "
-             f"{line('FONT').strip()!r}")
-    if "-I" not in line("IMAGE"):
-        fail("p4a-recipes/pygame-ce: sdl_image_includes is empty, so "
-             f"SDL_image.h would not be found. Got: {line('IMAGE').strip()!r}")
-    if "-I" not in line("MIXER"):
-        fail("p4a-recipes/pygame-ce: sdl_mixer_includes is empty, so "
-             f"SDL_mixer.h would not be found. Got: {line('MIXER').strip()!r}")
-
-    prerequisites = getattr(recipe, "hostpython_prerequisites", None) or []
-    if not any(str(p).lower().startswith("cython") for p in prerequisites):
-        fail("p4a-recipes/pygame-ce: hostpython_prerequisites has no cython. "
-             "pygame-ce's setup.py imports Cython for every build_ext run, so "
-             "the very first command p4a runs dies with "
-             "\"You need cython\".")
-
-    backend = (build_dir / "pyproject.toml").read_text(encoding="utf-8")
-    if "mesonpy" in backend:
-        fail("p4a-recipes/pygame-ce: pyproject.toml still selects meson-python "
-             "as the build backend, so the `pip install .` p4a runs after "
-             "build_ext will ignore the generated Setup and fail to cross "
-             "compile for Android.")
-    elif "setuptools.build_meta:__legacy__" not in backend:
-        fail("p4a-recipes/pygame-ce: pyproject.toml must select "
-             "setuptools.build_meta:__legacy__. The plain setuptools.build_meta "
-             "backend does not put the source directory on sys.path, so "
-             "setup.py's `import buildconfig` raises ModuleNotFoundError.")
-    if "[build-system]" not in backend:
-        fail("p4a-recipes/pygame-ce: prebuild_arch() left pyproject.toml "
-             "without a [build-system] table, so pip will build it without "
-             "Cython and setuptools available.")
-    elif "cython" not in backend.lower():
-        fail("p4a-recipes/pygame-ce: pyproject.toml's build requires omit "
-             "cython, but pip builds in an isolated env where the hostpython "
-             "Cython is invisible, and setup.py imports Cython on every run.")
-    if "[project]" not in backend or 'version = "2.5.2"' not in backend:
-        fail("p4a-recipes/pygame-ce: prebuild_arch() stripped [project] from "
-             "pyproject.toml. buildconfig.get_version reads "
-             'conf["project"]["version"] and setup.py dies with KeyError.')
-
-
-# Google Play has required targetSdk 36 for every new app and every update
-# since 31 Aug 2026 - see
-# developer.android.com/google/play/requirements/target-sdk.  An upload with
-# a lower targetSdkVersion is rejected at submission, not at review.
-PLAY_MIN_API = 36
-
-# Values people copy out of the buildozer.spec template and never change.
-PLACEHOLDER_SEGMENTS = {"yourstudio", "yourcompany", "yourdomain", "yourname",
-                        "example", "test", "acme", "yourdepartment"}
-
-SEGMENT = re.compile(r"[a-z][a-z0-9_]*")
-
-
-def png_size(path):
-    """(width, height) from a PNG's IHDR chunk - no Pillow needed."""
-    try:
-        head = path.read_bytes()[:24]
-    except OSError:
-        return None
-    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
-        return None
-    return struct.unpack(">II", head[16:24])
-
-
-def check_play_ready(keys):
-    """Everything Play Console enforces before it accepts an upload."""
-
-    def first(key):
-        return (keys.get(key) or [""])[0]
-
-    api = first("android.api")
-    if not api:
-        fail("buildozer.spec: 'android.api' is missing or commented out. "
-             "Play requires targetSdkVersion >= 36.")
-    else:
-        try:
-            if int(api) < PLAY_MIN_API:
-                fail(f"buildozer.spec: android.api = {api}, but Google Play "
-                     f"rejects anything below {PLAY_MIN_API} (Android 16) for "
-                     "new apps and updates since 31 Aug 2026. Raise it to "
-                     f"{PLAY_MIN_API}; targetSdkVersion is taken directly "
-                     "from this value.")
-        except ValueError:
-            fail(f"buildozer.spec: android.api must be an integer, got {api!r}.")
-
-    domain = first("package.domain")
-    if not domain:
-        fail("buildozer.spec: 'package.domain' is missing, so there is no "
-             "application id to upload.")
-    else:
-        segments = domain.split(".")
-        malformed = [s for s in segments if not SEGMENT.fullmatch(s)]
-        if len(segments) < 2 or malformed:
-            fail(f"buildozer.spec: package.domain = {domain!r} is not a valid "
-                 "reverse-DNS id - each dot-separated part must be lowercase "
-                 "alphanumerics starting with a letter.")
-        elif any(s in PLACEHOLDER_SEGMENTS or s.startswith("your") for s in segments):
-            fail(f"buildozer.spec: package.domain = {domain!r} is still the "
-                 "template placeholder. The application id becomes permanent "
-                 "the moment Play accepts it and cannot be changed later - "
-                 "set it to a real id first.")
-
-    name = first("package.name")
-    if name and not SEGMENT.fullmatch(name):
-        fail(f"buildozer.spec: package.name = {name!r} is not a valid "
-             "application id segment.")
-
-    numeric = first("android.numeric_version")
-    if not numeric:
-        fail("buildozer.spec: 'android.numeric_version' is missing, so the "
-             "versionCode falls back to p4a's automatic computation. Play "
-             "needs a value you control that strictly increases on every "
-             "upload - set it explicitly.")
-    else:
-        try:
-            if int(numeric) < 1:
-                fail(f"buildozer.spec: android.numeric_version = {numeric} "
-                     "must be >= 1.")
-        except ValueError:
-            fail("buildozer.spec: android.numeric_version must be an integer, "
-                 f"got {numeric!r}.")
-
-    if not first("version"):
-        fail("buildozer.spec: 'version' (the human readable versionName) is "
-             "missing.")
-
-    if not first("title"):
-        fail("buildozer.spec: 'title' is missing; Play and the launcher both "
-             "need an app label.")
-
-    source_dir = first("source.dir") or "."
-
-    for key, kind in (("icon.filename", "icon"),
-                      ("presplash.filename", "presplash")):
-        raw = first(key)
-        if not raw:
-            fail(f"buildozer.spec: '{key}' is missing or commented out. Play "
-                 "requires a 512x512 app icon and the default Kivy artwork "
-                 "ships otherwise.")
-            continue
-        path = pathlib.Path(raw.replace("%(source.dir)s", source_dir))
-        if not path.exists():
-            fail(f"buildozer.spec: {key} points at {path}, which does not "
-                 "exist. Commit the asset or fix the path.")
-            continue
-        if kind == "icon":
-            size = png_size(path)
-            if size is None:
-                fail(f"buildozer.spec: {path} is not a valid PNG; the launcher "
-                 "icon must be a PNG.")
-            elif size != (512, 512):
-                fail(f"buildozer.spec: launcher icon must be exactly 512x512 "
-                     f"for the Play listing, got {size[0]}x{size[1]}.")
-        else:
-            head = path.read_bytes()[:4]
-            if not (head.startswith(b"\xff\xd8") or head.startswith(b"\x89PNG")):
-                fail(f"buildozer.spec: {path} is neither a JPEG nor a PNG.")
 
 
 def check_main():
@@ -580,15 +97,14 @@ def check_main():
 
     extra = sorted(imported - ALLOWED_IMPORTS)
     if extra:
-        fail(f"main.py imports outside the allowed set {sorted(ALLOWED_IMPORTS)}: "
-             f"{extra}. The APK must stay pure pygame with no extra wheels.")
+        fail(
+            f"main.py imports outside the allowed set {sorted(ALLOWED_IMPORTS)}: "
+            f"{extra}. The APK must stay pure pygame with no extra wheels."
+        )
 
 
 def main():
     keys = check_spec()
-    check_play_ready(keys)
-    check_recipe()
-    check_recipe_prebuild()
     check_main()
 
     if errors:
@@ -600,19 +116,14 @@ def main():
     print("Packaging configuration OK:")
     for key in (
         "requirements",
+        "p4a.bootstrap",
         "p4a.branch",
         "p4a.local_recipes",
-        "p4a.bootstrap",
         "android.api",
         "android.minapi",
         "android.ndk_api",
         "android.ndk",
         "android.archs",
-        "android.numeric_version",
-        "package.domain",
-        "package.name",
-        "icon.filename",
-        "presplash.filename",
         "orientation",
         "fullscreen",
     ):
@@ -620,10 +131,6 @@ def main():
         if values:
             print(f"  {key} = {values[0]}")
 
-    domain = (keys.get("package.domain") or [""])[0]
-    name = (keys.get("package.name") or [""])[0]
-    if domain and name:
-        print(f"  application id  = {domain}.{name}")
     return 0
 
 

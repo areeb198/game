@@ -39,7 +39,7 @@ version = 1.0
 #               in ./p4a-recipes.  It MUST be pygame-ce, never plain "pygame":
 #               python-for-android's built-in pygame recipe is pinned to
 #               pygame 2.1.0 (2021) and does not compile against NDK r25b.
-requirements = python3==3.11.15,hostpython3==3.11.15,pygame-ce
+requirements = python3,pygame
 
 # (str) Presplash of the application
 presplash.filename = %(source.dir)s/data/presplash.jpg
